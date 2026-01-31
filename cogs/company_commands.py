@@ -754,7 +754,7 @@ class CompanyNameModal(discord.ui.Modal, title="Name Your Company"):
                         perms      = forum.permissions_for(bot_member)
 
                         required = {
-                            'Create Forum Threads': perms.create_forum_threads,
+                            'Create Forum Threads': perms.create_threads,
                             'Send Messages':        perms.send_messages,
                             'Manage Threads':       perms.manage_threads,
                             'Read Messages':        perms.read_messages,
