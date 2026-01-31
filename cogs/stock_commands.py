@@ -434,9 +434,12 @@ class SellStockView(discord.ui.View):
 class StockCommands(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        
+    
+    async def cog_load(self):
+        """Called when the cog is loaded - register persistent views"""
         # Register persistent view
         self.bot.add_view(StockMarketView())
+        print("✅ Stock market persistent views registered")
     
     async def is_admin(self, interaction: discord.Interaction) -> bool:
         """
