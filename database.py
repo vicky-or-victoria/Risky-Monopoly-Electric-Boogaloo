@@ -198,17 +198,26 @@ async def init_database():
             
             # ==================== COMPANY WARS/RAIDS ====================
             
-            # Drop and recreate company_raids table if schema is incompatible
-            try:
-                # Check if table exists and has correct schema
-                await conn.execute('SELECT attacker_id FROM company_raids LIMIT 0')
-            except asyncpg.exceptions.UndefinedColumnError:
-                # Table exists but has wrong schema - drop and recreate
-                print("Recreating company_raids table due to schema mismatch...")
-                await conn.execute('DROP TABLE IF EXISTS company_raids CASCADE')
-            except asyncpg.exceptions.UndefinedTableError:
-                # Table doesn't exist - will be created below
-                pass
+            # Check and fix company_raids table schema
+            table_exists = await conn.fetchval('''
+                SELECT EXISTS (
+                    SELECT FROM information_schema.tables 
+                    WHERE table_name = 'company_raids'
+                )
+            ''')
+            
+            if table_exists:
+                column_exists = await conn.fetchval('''
+                    SELECT EXISTS (
+                        SELECT FROM information_schema.columns 
+                        WHERE table_name = 'company_raids' 
+                        AND column_name = 'attacker_id'
+                    )
+                ''')
+                
+                if not column_exists:
+                    print("Recreating company_raids table due to schema mismatch...")
+                    await conn.execute('DROP TABLE IF EXISTS company_raids CASCADE')
             
             await conn.execute('''
                 CREATE TABLE IF NOT EXISTS company_raids (
@@ -226,17 +235,26 @@ async def init_database():
             await conn.execute('CREATE INDEX IF NOT EXISTS idx_raids_defender ON company_raids(defender_id)')
             await conn.execute('CREATE INDEX IF NOT EXISTS idx_raids_time ON company_raids(raided_at)')
             
-            # Drop and recreate company_wars table if schema is incompatible
-            try:
-                # Check if table exists and has correct schema
-                await conn.execute('SELECT attacker_id FROM company_wars LIMIT 0')
-            except asyncpg.exceptions.UndefinedColumnError:
-                # Table exists but has wrong schema - drop and recreate
-                print("Recreating company_wars table due to schema mismatch...")
-                await conn.execute('DROP TABLE IF EXISTS company_wars CASCADE')
-            except asyncpg.exceptions.UndefinedTableError:
-                # Table doesn't exist - will be created below
-                pass
+            # Check and fix company_wars table schema
+            table_exists = await conn.fetchval('''
+                SELECT EXISTS (
+                    SELECT FROM information_schema.tables 
+                    WHERE table_name = 'company_wars'
+                )
+            ''')
+            
+            if table_exists:
+                column_exists = await conn.fetchval('''
+                    SELECT EXISTS (
+                        SELECT FROM information_schema.columns 
+                        WHERE table_name = 'company_wars' 
+                        AND column_name = 'attacker_id'
+                    )
+                ''')
+                
+                if not column_exists:
+                    print("Recreating company_wars table due to schema mismatch...")
+                    await conn.execute('DROP TABLE IF EXISTS company_wars CASCADE')
             
             await conn.execute('''
                 CREATE TABLE IF NOT EXISTS company_wars (
