@@ -48,7 +48,8 @@ class RiskyMonopolyBot(commands.Bot):
                 'collectibles_commands',
                 'stock_commands',
                 'company_wars',
-                'corporations'
+                'corporations',
+                'startup_handler'
             ]
             
             loaded_cogs = []
@@ -156,6 +157,8 @@ class RiskyMonopolyBot(commands.Bot):
                 await interaction.response.send_message(msg, ephemeral=True)
         except Exception:
             pass
+
+    async def on_ready(self):
         """Called when bot is ready"""
         print(f'✅ Bot logged in as {self.user} (ID: {self.user.id})')
         print(f'Connected to {len(self.guilds)} guild(s)')
