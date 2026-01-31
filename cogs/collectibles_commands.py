@@ -22,15 +22,26 @@ def create_collectibles_catalog_embed() -> discord.Embed:
     )
     
     # Add category overview
-    for category_key, category_data in COLLECTIBLE_CATEGORIES.items():
-        items = get_collectibles_by_category(category_key)
-        if items:
-            price_range = f"${min(item['price'] for item in items):,} - ${max(item['price'] for item in items):,}"
-            embed.add_field(
-                name=f"{category_data['emoji']} {category_data['name']}",
-                value=f"**{len(items)} items** | {price_range}\n{category_data['description'][:100]}",
-                inline=False
-            )
+    try:
+        for category_key, category_data in COLLECTIBLE_CATEGORIES.items():
+            items = get_collectibles_by_category(category_key)
+            if items:
+                price_range = f"${min(item['price'] for item in items):,} - ${max(item['price'] for item in items):,}"
+                
+                # Safely get category data
+                category_name = category_data.get('name', category_key) if isinstance(category_data, dict) else str(category_data)
+                category_emoji = category_data.get('emoji', '📦') if isinstance(category_data, dict) else '📦'
+                category_desc = category_data.get('description', '')[:100] if isinstance(category_data, dict) else ''
+                
+                embed.add_field(
+                    name=f"{category_emoji} {category_name}",
+                    value=f"**{len(items)} items** | {price_range}\n{category_desc}",
+                    inline=False
+                )
+    except Exception as e:
+        print(f"Error creating collectibles catalog: {e}")
+        import traceback
+        traceback.print_exc()
     
     embed.add_field(
         name="💡 How to Use",
@@ -131,63 +142,83 @@ class CollectiblesCatalogView(discord.ui.View):
         """Show items in a specific category"""
         await interaction.response.defer(ephemeral=True)
         
-        items = get_collectibles_by_category(category)
-        category_data = COLLECTIBLE_CATEGORIES[category]
+        try:
+            items = get_collectibles_by_category(category)
+            category_data = COLLECTIBLE_CATEGORIES.get(category, {})
+            
+            # Safely get category info
+            if isinstance(category_data, dict):
+                category_name = category_data.get('name', category.title())
+                category_emoji = category_data.get('emoji', '📦')
+                category_desc = category_data.get('description', 'Browse exclusive items in this category.')
+            else:
+                category_name = category.title()
+                category_emoji = '📦'
+                category_desc = 'Browse exclusive items in this category.'
+            
+            if not items:
+                return await interaction.followup.send(
+                    f"No items available in {category_name}.",
+                    ephemeral=True
+                )
+            
+            embed = discord.Embed(
+                title=f"{category_emoji} {category_name}",
+                description=category_desc,
+                color=discord.Color.blue()
+            )
+            
+            # Show items grouped by rarity
+            by_rarity = {}
+            for item in items:
+                rarity = item.get('rarity', 'common')
+                if rarity not in by_rarity:
+                    by_rarity[rarity] = []
+                by_rarity[rarity].append(item)
+            
+            # Display in rarity order
+            rarity_order = ['legendary', 'epic', 'rare', 'uncommon', 'common']
+            for rarity in rarity_order:
+                if rarity in by_rarity:
+                    rarity_items = by_rarity[rarity]
+                    rarity_emoji = {
+                        'legendary': '🌟',
+                        'epic': '💜',
+                        'rare': '💙',
+                        'uncommon': '💚',
+                        'common': '⚪'
+                    }.get(rarity, '⚪')
+                    
+                    items_text = "\n".join([
+                        f"{item.get('emoji', '📦')} **{item.get('name', 'Unknown')}** - ${item.get('price', 0):,}"
+                        for item in rarity_items[:5]
+                    ])
+                    
+                    if len(rarity_items) > 5:
+                        items_text += f"\n*...and {len(rarity_items) - 5} more*"
+                    
+                    embed.add_field(
+                        name=f"{rarity_emoji} {rarity.title()} ({len(rarity_items)})",
+                        value=items_text,
+                        inline=False
+                    )
+            
+            player = await db.get_player(str(interaction.user.id))
+            if player:
+                embed.set_footer(text=f"Your balance: ${player['balance']:,} • Use /buy-collectible to purchase")
+            else:
+                embed.set_footer(text="Use /buy-collectible to purchase items")
+            
+            await interaction.followup.send(embed=embed, ephemeral=True)
         
-        if not items:
-            return await interaction.followup.send(
-                f"No items available in {category_data['name']}.",
+        except Exception as e:
+            print(f"Error showing category {category}: {e}")
+            import traceback
+            traceback.print_exc()
+            await interaction.followup.send(
+                f"❌ Error loading category. Please try again later.",
                 ephemeral=True
             )
-        
-        embed = discord.Embed(
-            title=f"{category_data['emoji']} {category_data['name']}",
-            description=category_data['description'],
-            color=discord.Color.blue()
-        )
-        
-        # Show items grouped by rarity
-        by_rarity = {}
-        for item in items:
-            rarity = item['rarity']
-            if rarity not in by_rarity:
-                by_rarity[rarity] = []
-            by_rarity[rarity].append(item)
-        
-        # Display in rarity order
-        rarity_order = ['legendary', 'epic', 'rare', 'uncommon', 'common']
-        for rarity in rarity_order:
-            if rarity in by_rarity:
-                rarity_items = by_rarity[rarity]
-                rarity_emoji = {
-                    'legendary': '🌟',
-                    'epic': '💜',
-                    'rare': '💙',
-                    'uncommon': '💚',
-                    'common': '⚪'
-                }.get(rarity, '⚪')
-                
-                items_text = "\n".join([
-                    f"{item['emoji']} **{item['name']}** - ${item['price']:,}"
-                    for item in rarity_items[:5]
-                ])
-                
-                if len(rarity_items) > 5:
-                    items_text += f"\n*...and {len(rarity_items) - 5} more*"
-                
-                embed.add_field(
-                    name=f"{rarity_emoji} {rarity.title()} ({len(rarity_items)})",
-                    value=items_text,
-                    inline=False
-                )
-        
-        player = await db.get_player(str(interaction.user.id))
-        if player:
-            embed.set_footer(text=f"Your balance: ${player['balance']:,} • Use /buy-collectible to purchase")
-        else:
-            embed.set_footer(text="Use /buy-collectible to purchase items")
-        
-        await interaction.followup.send(embed=embed, ephemeral=True)
 
 
 class BuyCollectibleView(discord.ui.View):
@@ -496,9 +527,12 @@ class SellCollectibleConfirmView(discord.ui.View):
 class CollectiblesCommands(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        
+    
+    async def cog_load(self):
+        """Called when the cog is loaded - register persistent views"""
         # Register persistent view
         self.bot.add_view(CollectiblesCatalogView())
+        print("✅ Collectibles catalog persistent views registered")
     
     async def is_admin(self, interaction: discord.Interaction) -> bool:
         """
