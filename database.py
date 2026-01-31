@@ -480,6 +480,14 @@ async def rename_company(company_id: int, new_name: str):
             company_id, new_name
         )
 
+async def update_company_thread(company_id: int, thread_id: str):
+    """Update the thread_id for a company"""
+    async with pool.acquire() as conn:
+        await conn.execute(
+            'UPDATE companies SET thread_id = $2 WHERE id = $1',
+            company_id, thread_id
+        )
+
 async def delete_company(company_id: int):
     """Delete a company"""
     async with pool.acquire() as conn:
