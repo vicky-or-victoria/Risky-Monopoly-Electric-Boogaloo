@@ -1,5 +1,4 @@
 # Database connection and operations using asyncpg for Neon PostgreSQL
-# COMPLETE REWRITE WITH ALL NEW FEATURES INTEGRATED
 
 import asyncpg
 import os
