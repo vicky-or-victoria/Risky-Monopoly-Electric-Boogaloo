@@ -160,7 +160,7 @@ class StockMarketView(discord.ui.View):
             history = await db.get_stock_price_history(symbol, limit=2)
             
             if len(history) >= 2:
-                old_price = history[1]['price']
+                old_price = history[1]['new_price']
                 change = current_price - old_price
                 change_percent = ((current_price - old_price) / old_price) * 100
             else:
@@ -491,7 +491,7 @@ class StockCommands(commands.Cog):
             history = await db.get_stock_price_history(symbol, limit=2)
             
             if len(history) >= 2:
-                old_price = history[1]['price']
+                old_price = history[1]['new_price']
                 change = current_price - old_price
                 change_percent = ((current_price - old_price) / old_price) * 100
             else:
