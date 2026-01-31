@@ -727,6 +727,18 @@ class CompanyNameModal(discord.ui.Modal, title="Name Your Company"):
             await db.update_player_balance(str(self.user_id), -self.company_data['cost'])
             print("Balance updated")
             
+            # Create company in database with custom name FIRST (without thread_id initially)
+            print("Creating company in database...")
+            company = await db.create_company(
+                owner_id=str(self.user_id),
+                name=custom_name,  # Use custom name
+                rank=self.rank,
+                company_type=self.company_data['name'],  # Store original type
+                base_income=self.company_data['income'],
+                thread_id=None  # Will update this after thread creation
+            )
+            print(f"Company created in database: ID {company['id']}")
+            
             # Get guild settings for forum
             print("Getting guild settings...")
             settings = await db.get_guild_settings(str(interaction.guild.id))
@@ -777,6 +789,7 @@ class CompanyNameModal(discord.ui.Modal, title="Name Your Company"):
                             description=f"**Rank {self.rank} {self.company_data['name']}**\nOwned by <@{self.user_id}>",
                             color=get_rank_color(self.rank)
                         )
+                        initial_embed.add_field(name="🆔 ID", value=f"#{company['id']}", inline=True)
                         initial_embed.add_field(name="💵 Income/30s", value=f"${self.company_data['income']:,}", inline=True)
                         initial_embed.add_field(name="📊 Income/Min", value=f"${self.company_data['income'] * 2:,}", inline=True)
                         initial_embed.add_field(name="🕐 Income/Hour", value=f"${self.company_data['income'] * 120:,}", inline=True)
@@ -795,6 +808,10 @@ class CompanyNameModal(discord.ui.Modal, title="Name Your Company"):
                         )
                         thread = thread_message.thread
                         print(f"Thread created: {thread.id}")
+                        
+                        # Update company with thread_id
+                        print("Updating company with thread_id...")
+                        await db.update_company_thread(company['id'], str(thread.id))
                         
                         # Pin the embed message
                         if thread_message.message:
@@ -818,18 +835,6 @@ class CompanyNameModal(discord.ui.Modal, title="Name Your Company"):
                     raise  # Re-raise to trigger refund
             else:
                 print("No forum ID set, skipping thread creation")
-            
-            # Create company in database with custom name
-            print("Creating company in database...")
-            company = await db.create_company(
-                owner_id=str(self.user_id),
-                name=custom_name,  # Use custom name
-                rank=self.rank,
-                company_type=self.company_data['name'],  # Store original type
-                base_income=self.company_data['income'],
-                thread_id=str(thread.id) if thread else None
-            )
-            print(f"Company created in database: ID {company['id']}")
             
             # Success embed
             print("Creating success embed...")
