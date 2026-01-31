@@ -1527,14 +1527,34 @@ class AdminCommands(commands.Cog):
         await interaction.response.defer(ephemeral=True)
         
         try:
-            # Delete the company thread if it exists
+            # Send warning message in thread FIRST, then wait and delete
             if company['thread_id']:
                 try:
                     thread = interaction.guild.get_thread(int(company['thread_id']))
                     if not thread:
                         thread = await interaction.guild.fetch_channel(int(company['thread_id']))
+                    
                     if thread:
+                        # Send the warning embed
+                        warning_embed = discord.Embed(
+                            title="🔨 COMPANY DISBANDED BY ADMIN",
+                            description=f"**{company['name']}** has been forcibly disbanded by an administrator.\n\nThis thread will be deleted in 5 seconds.",
+                            color=discord.Color.dark_red()
+                        )
+                        warning_embed.add_field(name="🏢 Company", value=company['name'], inline=True)
+                        warning_embed.add_field(name="⭐ Rank", value=company['rank'], inline=True)
+                        warning_embed.add_field(name="💰 Income", value=f"${company['current_income']:,}/30s", inline=True)
+                        warning_embed.timestamp = discord.utils.utcnow()
+                        
+                        await thread.send(embed=warning_embed)
+                        
+                        # Wait 5 seconds
+                        import asyncio
+                        await asyncio.sleep(5)
+                        
+                        # Now delete the thread
                         await thread.delete()
+                        print(f"Deleted thread {thread.id} for company {company['name']}")
                 except Exception as e:
                     print(f"Failed to delete thread {company['thread_id']}: {e}")
             
