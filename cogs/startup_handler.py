@@ -41,8 +41,8 @@ class StartupHandler(commands.Cog):
         """Re-register all persistent views with the bot"""
         try:
             # Import the view classes
-            from stock_commands import StockMarketView
-            from collectibles_commands import CollectiblesCatalogView
+            from cogs.stock_commands import StockMarketView
+            from cogs.collectibles_commands import CollectiblesCatalogView
             
             # Register persistent views
             self.bot.add_view(StockMarketView())
@@ -110,7 +110,7 @@ class StartupHandler(commands.Cog):
         try:
             import database as db
             from stock_market import STOCK_COMPANIES, create_stock_market_embed
-            from stock_commands import StockMarketView
+            from cogs.stock_commands import StockMarketView
             
             for guild in self.bot.guilds:
                 try:
@@ -187,7 +187,7 @@ class StartupHandler(commands.Cog):
         """Restore collectibles catalog displays for all guilds"""
         try:
             import database as db
-            from collectibles_commands import create_collectibles_catalog_embed, CollectiblesCatalogView
+            from cogs.collectibles_commands import create_collectibles_catalog_embed, CollectiblesCatalogView
             
             for guild in self.bot.guilds:
                 try:
