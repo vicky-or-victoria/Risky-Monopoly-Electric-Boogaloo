@@ -128,6 +128,9 @@ async def init_database():
                     corporation_member_limit INTEGER DEFAULT 5,
                     corporation_leaderboard_channel_id VARCHAR(255),
                     corporation_leaderboard_message_id VARCHAR(255),
+                    registration_channel_id VARCHAR(255),
+                    registration_message_id VARCHAR(255),
+                    registration_role_id VARCHAR(255),
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
@@ -336,6 +339,9 @@ async def init_database():
                 "ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS corporation_member_limit INTEGER DEFAULT 5",
                 "ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS corporation_leaderboard_channel_id VARCHAR(255)",
                 "ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS corporation_leaderboard_message_id VARCHAR(255)",
+                "ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS registration_channel_id VARCHAR(255)",
+                "ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS registration_message_id VARCHAR(255)",
+                "ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS registration_role_id VARCHAR(255)",
             ]
             for migration in migrations:
                 await conn.execute(migration)
@@ -1341,3 +1347,68 @@ async def get_corporation_leaderboard_message(guild_id: str) -> Optional[str]:
             'SELECT corporation_leaderboard_message_id FROM guild_settings WHERE guild_id = $1',
             guild_id
         )
+
+# ==================== REGISTRATION SYSTEM ====================
+
+async def set_registration_channel(guild_id: str, channel_id: str):
+    """Set registration channel"""
+    async with pool.acquire() as conn:
+        await conn.execute('''
+            INSERT INTO guild_settings (guild_id, registration_channel_id)
+            VALUES ($1, $2)
+            ON CONFLICT (guild_id)
+            DO UPDATE SET registration_channel_id = $2
+        ''', guild_id, channel_id)
+
+async def get_registration_channel(guild_id: str) -> Optional[str]:
+    """Get registration channel"""
+    async with pool.acquire() as conn:
+        return await conn.fetchval(
+            'SELECT registration_channel_id FROM guild_settings WHERE guild_id = $1',
+            guild_id
+        )
+
+async def set_registration_message(guild_id: str, message_id: str):
+    """Set registration message"""
+    async with pool.acquire() as conn:
+        await conn.execute('''
+            INSERT INTO guild_settings (guild_id, registration_message_id)
+            VALUES ($1, $2)
+            ON CONFLICT (guild_id)
+            DO UPDATE SET registration_message_id = $2
+        ''', guild_id, message_id)
+
+async def get_registration_message(guild_id: str) -> Optional[str]:
+    """Get registration message"""
+    async with pool.acquire() as conn:
+        return await conn.fetchval(
+            'SELECT registration_message_id FROM guild_settings WHERE guild_id = $1',
+            guild_id
+        )
+
+async def set_registration_role(guild_id: str, role_id: str):
+    """Set registration role"""
+    async with pool.acquire() as conn:
+        await conn.execute('''
+            INSERT INTO guild_settings (guild_id, registration_role_id)
+            VALUES ($1, $2)
+            ON CONFLICT (guild_id)
+            DO UPDATE SET registration_role_id = $2
+        ''', guild_id, role_id)
+
+async def get_registration_role(guild_id: str) -> Optional[str]:
+    """Get registration role"""
+    async with pool.acquire() as conn:
+        return await conn.fetchval(
+            'SELECT registration_role_id FROM guild_settings WHERE guild_id = $1',
+            guild_id
+        )
+
+async def get_registration_settings(guild_id: str) -> Optional[Dict]:
+    """Get all registration settings for a guild"""
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow('''
+            SELECT registration_channel_id, registration_message_id, registration_role_id
+            FROM guild_settings WHERE guild_id = $1
+        ''', guild_id)
+        return dict(row) if row else None
