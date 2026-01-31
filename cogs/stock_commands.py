@@ -26,8 +26,9 @@ class StockMarketView(discord.ui.View):
         
         # Get current prices
         current_prices = {}
-        for symbol in STOCK_COMPANIES.keys():
-            current_prices[symbol] = await db.get_stock_price(symbol)
+        for symbol, data in STOCK_COMPANIES.items():
+            price = await db.get_stock_price(symbol)
+            current_prices[symbol] = price if price is not None else data['initial_price']
         
         # Create view
         cog = interaction.client.get_cog('StockCommands')
@@ -524,8 +525,9 @@ class StockCommands(commands.Cog):
         
         # Get current prices
         current_prices = {}
-        for symbol in STOCK_COMPANIES.keys():
-            current_prices[symbol] = await db.get_stock_price(symbol)
+        for symbol, data in STOCK_COMPANIES.items():
+            price = await db.get_stock_price(symbol)
+            current_prices[symbol] = price if price is not None else data['initial_price']
         
         # Create view
         view = BuyStockView(interaction.user.id, player, current_prices, self)
