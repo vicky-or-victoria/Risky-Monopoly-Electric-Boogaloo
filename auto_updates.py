@@ -45,10 +45,27 @@ async def trigger_all_leaderboards_update():
     except Exception as e:
         print(f"Error in auto-update leaderboards: {e}")
 
+async def trigger_all_corporation_leaderboards_update():
+    """Trigger an update for all corporation leaderboards"""
+    if not _bot_instance:
+        return
+    
+    try:
+        from events import update_corporation_leaderboard
+        for guild in _bot_instance.guilds:
+            try:
+                await update_corporation_leaderboard(_bot_instance, str(guild.id))
+            except Exception as e:
+                print(f'Error auto-updating corporation leaderboard for guild {guild.id}: {e}')
+    except Exception as e:
+        print(f"Error in auto-update corporation leaderboards: {e}")
+
 async def trigger_updates_for_balance_change(user_id: str):
     """Trigger updates when a player's balance changes"""
     # Update leaderboard since player balance changed
     await trigger_all_leaderboards_update()
+    # Update corporation leaderboards since player balance affects corporation wealth
+    await trigger_all_corporation_leaderboards_update()
 
 async def trigger_updates_for_company_change(company_id: int):
     """Trigger updates when a company's stats change"""
