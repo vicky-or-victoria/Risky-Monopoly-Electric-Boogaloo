@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 
 import database as db
 from events import schedule_income_and_events  # FIXED: Use the new combined scheduler
+from stock_market import schedule_stock_updates
 
 # Load environment variables
 load_dotenv()
@@ -180,6 +181,13 @@ class RiskyMonopolyBot(commands.Bot):
             print(f'⚠️ Failed to start income/event system: {e}')
             import traceback
             traceback.print_exc()
+        
+        # Schedule stock market price updates
+        try:
+            schedule_stock_updates(self)
+            print('✅ Stock market update system started (every 3 minutes)')
+        except Exception as e:
+            print(f'⚠️ Failed to start stock update system: {e}')
         
         # Check for overdue loans every hour
         async def check_overdue_loans():
