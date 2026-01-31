@@ -30,24 +30,24 @@ STOCK_COMPANIES = {
         'emoji': '🚗'
     },
     'AERO': {
-        'name': 'AeroSpace Dynamics',
-        'symbol': 'AERO',
+        'name': 'Locked-In Risk Dynamics',
+        'symbol': 'LMRT',
         'initial_price': 1500,
         'volatility': 0.10,
         'sector': 'Aerospace',
         'emoji': '✈️'
     },
     'BANK': {
-        'name': 'Global Banking Corp',
-        'symbol': 'BANK',
+        'name': 'National Bank of Risk Universalis',
+        'symbol': 'RBNK',
         'initial_price': 500,
         'volatility': 0.04,
         'sector': 'Finance',
         'emoji': '🏦'
     },
     'ENRG': {
-        'name': 'EnergyMax Solutions',
-        'symbol': 'ENRG',
+        'name': 'Mega Risk Energy Company',
+        'symbol': 'MREC',
         'initial_price': 750,
         'volatility': 0.12,
         'sector': 'Energy',
@@ -92,6 +92,14 @@ STOCK_COMPANIES = {
         'volatility': 0.06,
         'sector': 'Retail',
         'emoji': '🛒'
+    },
+    'FINANCE': {
+        'name': 'Omn and Arch Associates',
+        'symbol': 'OAAF',
+        'initial_price': 1250,
+        'volatility': 0.25,
+        'sector': 'Finance and Accounting',
+        'emoji': '💵'
     }
 }
 
