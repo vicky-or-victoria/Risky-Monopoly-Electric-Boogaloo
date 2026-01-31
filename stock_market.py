@@ -14,8 +14,8 @@ if TYPE_CHECKING:
 # Stock market companies (NPCs)
 STOCK_COMPANIES = {
     'TECH': {
-        'name': 'TechCorp Industries',
-        'symbol': 'TECH',
+        'name': 'Stark Industries',
+        'symbol': 'STARK',
         'initial_price': 1000,
         'volatility': 0.08,  # 8% max change per update
         'sector': 'Technology',
