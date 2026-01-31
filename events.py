@@ -227,6 +227,69 @@ async def update_company_embed(bot: 'commands.Bot', company: dict):
     except Exception as e:
         print(f"Error updating company embed for company {company['id']}: {e}")
 
+async def update_corporation_leaderboard(bot: 'commands.Bot', guild_id: str):
+    """Update the corporation leaderboard for a specific guild"""
+    try:
+        # Get the channel and message IDs
+        channel_id = await db.get_corporation_leaderboard_channel(guild_id)
+        message_id = await db.get_corporation_leaderboard_message(guild_id)
+        
+        if not channel_id or not message_id:
+            return  # Leaderboard not set up for this guild
+        
+        # Get the channel
+        channel = bot.get_channel(int(channel_id))
+        if not channel:
+            try:
+                channel = await bot.fetch_channel(int(channel_id))
+            except:
+                return
+        
+        if not channel:
+            return
+        
+        # Get the message
+        try:
+            message = await channel.fetch_message(int(message_id))
+        except:
+            return
+        
+        # Get corporation leaderboard data
+        corps = await db.get_corporation_leaderboard(guild_id, limit=25)
+        
+        # Build the embed
+        embed = discord.Embed(
+            title="🏆 Corporation Leaderboard",
+            description="Top corporations by total member wealth\n*Updates every 30 seconds*",
+            color=discord.Color.gold()
+        )
+        
+        if corps:
+            for i, corp in enumerate(corps[:10], 1):  # Show top 10
+                medal = {1: "🥇", 2: "🥈", 3: "🥉"}.get(i, f"{i}.")
+                
+                embed.add_field(
+                    name=f"{medal} [{corp['tag']}] {corp['name']}",
+                    value=f"💰 ${corp['total_wealth']:,} | 👥 {corp['member_count']} members | 👑 <@{corp['leader_id']}>",
+                    inline=False
+                )
+        else:
+            embed.add_field(
+                name="No Corporations Yet",
+                value="Create a corporation with `/create-corporation`!",
+                inline=False
+            )
+        
+        embed.set_footer(text=f"Total corporations: {len(corps)} | Last updated")
+        embed.timestamp = discord.utils.utcnow()
+        
+        # Edit the message
+        await message.edit(embed=embed)
+        
+    except Exception as e:
+        print(f"Error updating corporation leaderboard for guild {guild_id}: {e}")
+
+
 def schedule_income_and_events(bot: 'commands.Bot'):
     """Schedule BOTH income generation (every 30s) AND event processing (every 30s check)"""
     import asyncio
@@ -253,6 +316,16 @@ def schedule_income_and_events(bot: 'commands.Bot'):
                                 print(f'Error updating leaderboard for guild {guild.id}: {e}')
                 except Exception as e:
                     print(f'Error in leaderboard update: {e}')
+                
+                # Update all corporation leaderboards
+                try:
+                    for guild in bot.guilds:
+                        try:
+                            await update_corporation_leaderboard(bot, str(guild.id))
+                        except Exception as e:
+                            print(f'Error updating corporation leaderboard for guild {guild.id}: {e}')
+                except Exception as e:
+                    print(f'Error in corporation leaderboard update: {e}')
                 
                 # Wait 30 seconds before next cycle
                 await asyncio.sleep(30)
