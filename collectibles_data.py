@@ -370,7 +370,7 @@ RARITY_COLORS = {
 
 def get_collectibles_by_category(category: str):
     """Get all collectibles in a category"""
-    return {k: v for k, v in COLLECTIBLES.items() if v['category'] == category}
+    return [v for k, v in COLLECTIBLES.items() if v['category'] == category]
 
 def get_collectible_by_id(collectible_id: str):
     """Get a collectible by its ID"""
