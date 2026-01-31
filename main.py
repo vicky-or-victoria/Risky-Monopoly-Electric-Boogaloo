@@ -43,7 +43,12 @@ class RiskyMonopolyBot(commands.Bot):
             cogs = [
                 'admin_commands',
                 'company_commands',
-                'economy_commands'
+                'economy_commands',
+                'tax_commands',
+                'collectibles_commands',
+                'stock_commands',
+                'company_wars',
+                'corporations'
             ]
             
             loaded_cogs = []
