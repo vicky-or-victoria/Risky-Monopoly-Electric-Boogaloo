@@ -8,8 +8,15 @@ from typing import Optional
 import database as db
 from collectibles_data import (
     COLLECTIBLES, COLLECTIBLE_CATEGORIES, RARITY_COLORS,
-    get_collectibles_by_category, get_collectible_by_id, get_all_categories
+    get_collectibles_by_category as _get_collectibles_by_category, get_collectible_by_id, get_all_categories
 )
+
+def get_collectibles_by_category(category: str):
+    """Wrapper that guarantees a list of item dicts regardless of upstream return type."""
+    result = _get_collectibles_by_category(category)
+    if isinstance(result, dict):
+        return list(result.values())
+    return result
 
 
 def create_collectibles_catalog_embed() -> discord.Embed:
