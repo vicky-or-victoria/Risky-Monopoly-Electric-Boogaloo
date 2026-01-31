@@ -754,12 +754,12 @@ class CompanyNameModal(discord.ui.Modal, title="Name Your Company"):
                         perms      = forum.permissions_for(bot_member)
 
                         required = {
-                            'Create Forum Threads': perms.create_threads,
-                            'Send Messages':        perms.send_messages,
-                            'Manage Threads':       perms.manage_threads,
-                            'Read Messages':        perms.read_messages,
+                            'create_public_threads': 'Create Forum Threads',
+                            'send_messages':         'Send Messages',
+                            'manage_threads':        'Manage Threads',
+                            'read_messages':         'Read Messages',
                         }
-                        missing = [name for name, has in required.items() if not has]
+                        missing = [label for attr, label in required.items() if not getattr(perms, attr, False)]
 
                         if missing:
                             missing_list = "\n".join(f"  • {m}" for m in missing)
