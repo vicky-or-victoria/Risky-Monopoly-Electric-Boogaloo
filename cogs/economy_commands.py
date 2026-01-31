@@ -7,6 +7,7 @@ import os
 from datetime import datetime, timedelta
 
 import database as db
+from registration_check import check_registration
 
 # Loan tiers - designed to cover upgrades, NOT next rank company purchases
 LOAN_TIERS = {
@@ -463,6 +464,10 @@ class EconomyCommands(commands.Cog):
     
     @app_commands.command(name="balance", description="Check your current balance")
     async def balance(self, interaction: discord.Interaction):
+        # Registration check
+        if not await check_registration(interaction):
+            return
+        
         player = await db.get_player(str(interaction.user.id))
         
         if not player:
