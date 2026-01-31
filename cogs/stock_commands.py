@@ -251,40 +251,39 @@ class StockCommands(commands.Cog):
         self.bot = bot
     
     async def is_admin(self, interaction: discord.Interaction) -> bool:
-        """Check if user is bot owner, server owner, or has admin role"""
-        try:
-            # Check if user is bot owner
-            app_info = interaction.client.application
-            is_bot_owner = interaction.user.id == app_info.owner.id if app_info and app_info.owner else False
-            
-            if is_bot_owner:
-                return True
-            
-            # Check if user is server owner
-            if interaction.user.id == interaction.guild.owner_id:
-                return True
-            
-            # Check if user has administrator permissions
-            if interaction.user.guild_permissions.administrator:
-                return True
-            
-            # Check if user has an authorized admin role
-            try:
-                settings = await db.get_guild_settings(str(interaction.guild.id))
-                if settings and settings.get('admin_role_ids'):
-                    admin_role_ids = settings['admin_role_ids']
-                    user_role_ids = [str(role.id) for role in interaction.user.roles]
-                    
-                    if any(role_id in admin_role_ids for role_id in user_role_ids):
-                        return True
-            except Exception as e:
-                print(f"Error checking admin roles from database: {e}")
-                # If database check fails, fall through to return False
-            
+        """
+        Check if user is:
+        1. Bot owner (always has access)
+        2. Server admin (always has access)
+        3. Has an authorized admin role
+        """
+        if not interaction.guild:
             return False
-        except Exception as e:
-            print(f"Error in is_admin check: {e}")
-            return False
+        
+        # Check if user is bot owner
+        app_info = interaction.client.application
+        is_owner = interaction.user.id == app_info.owner.id if app_info and app_info.owner else False
+        
+        if is_owner:
+            return True
+        
+        # Check if user has administrator permissions
+        is_admin = interaction.user.guild_permissions.administrator
+        
+        if is_admin:
+            return True
+        
+        # Check if user has an authorized admin role
+        settings = await db.get_guild_settings(str(interaction.guild.id))
+        if settings and settings.get('admin_role_ids'):
+            admin_role_ids = settings['admin_role_ids']
+            user_role_ids = [str(role.id) for role in interaction.user.roles]
+            
+            # Check if user has any of the authorized roles
+            if any(role_id in admin_role_ids for role_id in user_role_ids):
+                return True
+        
+        return False
     
     @app_commands.command(name="stock-market", description="📊 View the current stock market")
     async def stock_market(self, interaction: discord.Interaction):
