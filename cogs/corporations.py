@@ -312,5 +312,99 @@ class Corporations(commands.Cog):
         
         await interaction.response.send_message(embed=embed)
 
+    @app_commands.command(name="setup-corporation-leaderboard", description="⚙️ Set up auto-updating corporation leaderboard (Admin only)")
+    @app_commands.describe(
+        channel="Channel where the corporation leaderboard will be posted"
+    )
+    async def setup_corporation_leaderboard(self, interaction: discord.Interaction, channel: discord.TextChannel):
+        """Set up an auto-updating corporation leaderboard"""
+        # Check if user is bot owner
+        app_info = interaction.client.application
+        is_bot_owner = interaction.user.id == app_info.owner.id if app_info and app_info.owner else False
+        
+        if not is_bot_owner:
+            # Check if user is server owner
+            if interaction.user.id != interaction.guild.owner_id:
+                # Check if user has administrator permissions
+                if not interaction.user.guild_permissions.administrator:
+                    # Check if user has an authorized admin role
+                    settings = await db.get_guild_settings(str(interaction.guild.id))
+                    if settings and settings.get('admin_role_ids'):
+                        admin_role_ids = settings['admin_role_ids']
+                        user_role_ids = [str(role.id) for role in interaction.user.roles]
+                        
+                        if not any(role_id in admin_role_ids for role_id in user_role_ids):
+                            await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=True)
+                            return
+                    else:
+                        await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=True)
+                        return
+        
+        await interaction.response.defer(ephemeral=True)
+        
+        try:
+            # Create initial leaderboard embed
+            corps = await db.get_corporation_leaderboard(str(interaction.guild.id), limit=25)
+            
+            embed = discord.Embed(
+                title="🏆 Corporation Leaderboard",
+                description="Top corporations by total member wealth\n*Updates every 30 seconds*",
+                color=discord.Color.gold()
+            )
+            
+            if corps:
+                for i, corp in enumerate(corps[:10], 1):  # Show top 10
+                    medal = {1: "🥇", 2: "🥈", 3: "🥉"}.get(i, f"{i}.")
+                    
+                    embed.add_field(
+                        name=f"{medal} [{corp['tag']}] {corp['name']}",
+                        value=f"💰 ${corp['total_wealth']:,} | 👥 {corp['member_count']} members | 👑 <@{corp['leader_id']}>",
+                        inline=False
+                    )
+            else:
+                embed.add_field(
+                    name="No Corporations Yet",
+                    value="Create a corporation with `/create-corporation`!",
+                    inline=False
+                )
+            
+            embed.set_footer(text=f"Total corporations: {len(corps)} | Last updated")
+            embed.timestamp = discord.utils.utcnow()
+            
+            # Send the message to the channel
+            message = await channel.send(embed=embed)
+            
+            # Store the channel and message IDs
+            await db.set_corporation_leaderboard_channel(str(interaction.guild.id), str(channel.id))
+            await db.set_corporation_leaderboard_message(str(interaction.guild.id), str(message.id))
+            
+            success_embed = discord.Embed(
+                title="✅ Corporation Leaderboard Set Up!",
+                description=f"The corporation leaderboard will now auto-update every 30 seconds in {channel.mention}",
+                color=discord.Color.green()
+            )
+            success_embed.add_field(
+                name="📋 Features",
+                value=(
+                    "• Updates automatically every 30 seconds\n"
+                    "• Shows top 10 corporations by total member wealth\n"
+                    "• Displays member count and leader for each corporation"
+                ),
+                inline=False
+            )
+            
+            await interaction.followup.send(embed=success_embed, ephemeral=True)
+            
+        except discord.Forbidden:
+            await interaction.followup.send(
+                "❌ I don't have permission to send messages in that channel!",
+                ephemeral=True
+            )
+        except Exception as e:
+            await interaction.followup.send(
+                f"❌ Failed to set up corporation leaderboard: {e}",
+                ephemeral=True
+            )
+
 async def setup(bot):
     await bot.add_cog(Corporations(bot))
