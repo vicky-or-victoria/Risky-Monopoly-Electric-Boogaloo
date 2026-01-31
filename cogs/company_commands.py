@@ -8,6 +8,7 @@ import asyncio
 
 import database as db
 from company_data import COMPANY_DATA, ASSET_TYPES, get_rank_color
+from registration_check import check_registration
 
 # Permission check for admin commands
 async def is_admin_or_authorized(ctx_or_interaction) -> bool:
@@ -162,6 +163,10 @@ class CompanyCommands(commands.Cog):
     async def create_company(self, ctx: commands.Context):
         """Create a new company with an interactive selection process"""
         try:
+            # REGISTRATION CHECK - Must be done first for interaction-based commands
+            if ctx.interaction and not await check_registration(ctx.interaction):
+                return  # check_registration already sends the error message
+            
             # Check if guild settings exist
             settings = await db.get_guild_settings(str(ctx.guild.id))
             
