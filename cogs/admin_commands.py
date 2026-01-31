@@ -1310,7 +1310,7 @@ class AdminCommands(commands.Cog):
 
         # Permissions the bot needs to function in company/bank forums
         REQUIRED_FORUM_PERMS = {
-            'create_forum_threads': 'Create Forum Threads',
+            'create_threads': 'Create Forum Threads',
             'send_messages': 'Send Messages',
             'manage_threads': 'Manage Threads',
             'manage_messages': 'Manage Messages',
