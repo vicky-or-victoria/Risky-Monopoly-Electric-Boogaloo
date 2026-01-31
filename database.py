@@ -318,6 +318,23 @@ async def init_database():
             ''')
             
             await conn.execute('CREATE INDEX IF NOT EXISTS idx_corp_invites_user ON corporation_invites(user_id)')
+            
+            # ==================== MIGRATIONS ====================
+            # ALTER TABLE migrations for columns added after initial table creation.
+            # CREATE TABLE IF NOT EXISTS skips entirely when the table already exists,
+            # so columns added in later deploys never get created on live databases.
+            # ADD COLUMN IF NOT EXISTS is idempotent — safe to run every startup.
+            
+            migrations = [
+                "ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS collectibles_catalog_channel_id VARCHAR(255)",
+                "ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS collectibles_catalog_message_id VARCHAR(255)",
+                "ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS stock_market_channel_id VARCHAR(255)",
+                "ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS stock_market_message_id VARCHAR(255)",
+                "ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS stock_update_interval_minutes INTEGER DEFAULT 3",
+                "ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS corporation_member_limit INTEGER DEFAULT 5",
+            ]
+            for migration in migrations:
+                await conn.execute(migration)
     
     print('✅ Database initialized successfully with all features')
 
