@@ -6,6 +6,7 @@ from discord.ext import commands
 from typing import Optional
 
 import database as db
+from registration_check import check_registration
 
 class Corporations(commands.Cog):
     def __init__(self, bot):
@@ -23,6 +24,10 @@ class Corporations(commands.Cog):
         tag: app_commands.Range[str, 3, 5]
     ):
         """Create a new corporation"""
+        # Registration check
+        if not await check_registration(interaction):
+            return
+        
         await interaction.response.defer()
         
         # Check if player is already in a corporation
