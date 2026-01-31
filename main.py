@@ -50,6 +50,7 @@ class RiskyMonopolyBot(commands.Bot):
                 'stock_commands',
                 'company_wars',
                 'corporations',
+                'registration_system',
                 'startup_handler'
             ]
             
