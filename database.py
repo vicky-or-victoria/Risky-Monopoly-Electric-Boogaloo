@@ -123,6 +123,8 @@ async def init_database():
                     stock_market_channel_id VARCHAR(255),
                     stock_market_message_id VARCHAR(255),
                     stock_update_interval_minutes INTEGER DEFAULT 3,
+                    collectibles_catalog_channel_id VARCHAR(255),
+                    collectibles_catalog_message_id VARCHAR(255),
                     corporation_member_limit INTEGER DEFAULT 5,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
@@ -728,6 +730,52 @@ async def get_command_post_restriction(guild_id: str, command_name: str) -> Opti
         query = f'SELECT {column_name} FROM guild_settings WHERE guild_id = $1'
         result = await conn.fetchval(query, guild_id)
         return result
+
+
+# ==================== STOCK MARKET DISPLAY ====================
+
+async def set_stock_market_channel(guild_id: str, channel_id: str):
+    """Set the stock market display channel for a guild"""
+    async with pool.acquire() as conn:
+        await conn.execute('''
+            INSERT INTO guild_settings (guild_id, stock_market_channel_id)
+            VALUES ($1, $2)
+            ON CONFLICT (guild_id)
+            DO UPDATE SET stock_market_channel_id = $2
+        ''', guild_id, channel_id)
+
+async def set_stock_market_message(guild_id: str, message_id: str):
+    """Set the stock market display message ID for a guild"""
+    async with pool.acquire() as conn:
+        await conn.execute('''
+            INSERT INTO guild_settings (guild_id, stock_market_message_id)
+            VALUES ($1, $2)
+            ON CONFLICT (guild_id)
+            DO UPDATE SET stock_market_message_id = $2
+        ''', guild_id, message_id)
+
+
+# ==================== COLLECTIBLES CATALOG DISPLAY ====================
+
+async def set_collectibles_catalog_channel(guild_id: str, channel_id: str):
+    """Set the collectibles catalog channel for a guild"""
+    async with pool.acquire() as conn:
+        await conn.execute('''
+            INSERT INTO guild_settings (guild_id, collectibles_catalog_channel_id)
+            VALUES ($1, $2)
+            ON CONFLICT (guild_id)
+            DO UPDATE SET collectibles_catalog_channel_id = $2
+        ''', guild_id, channel_id)
+
+async def set_collectibles_catalog_message(guild_id: str, message_id: str):
+    """Set the collectibles catalog message ID for a guild"""
+    async with pool.acquire() as conn:
+        await conn.execute('''
+            INSERT INTO guild_settings (guild_id, collectibles_catalog_message_id)
+            VALUES ($1, $2)
+            ON CONFLICT (guild_id)
+            DO UPDATE SET collectibles_catalog_message_id = $2
+        ''', guild_id, message_id)
 
 
 # ==================== TAX SYSTEM ====================
