@@ -257,7 +257,10 @@ class CompanyCommands(commands.Cog):
             import traceback
             traceback.print_exc()
             try:
-                await ctx.send(f"❌ An error occurred: {str(e)}", ephemeral=True if ctx.interaction else False)
+                if ctx.interaction:
+                    await ctx.interaction.followup.send(f"❌ An error occurred: {str(e)}", ephemeral=True)
+                else:
+                    await ctx.send(f"❌ An error occurred: {str(e)}")
             except:
                 pass
     
@@ -268,6 +271,10 @@ class CompanyCommands(commands.Cog):
         Can be used anywhere. If you have multiple companies, you'll choose which one to upgrade.
         """
         try:
+            # Defer immediately so the interaction doesn't expire while we hit the DB
+            if ctx.interaction:
+                await ctx.interaction.response.defer(ephemeral=True)
+            
             # Ensure player exists
             await db.upsert_player(str(ctx.author.id), ctx.author.name)
             
@@ -278,10 +285,15 @@ class CompanyCommands(commands.Cog):
             companies = await db.get_player_companies(str(ctx.author.id))
             
             if not companies:
-                return await ctx.send(
-                    '❌ You don\'t own any companies! Use `rm!create-company` to create one.',
-                    ephemeral=True if ctx.interaction else False
-                )
+                if ctx.interaction:
+                    return await ctx.interaction.followup.send(
+                        '❌ You don\'t own any companies! Use `rm!create-company` to create one.',
+                        ephemeral=True
+                    )
+                else:
+                    return await ctx.send(
+                        '❌ You don\'t own any companies! Use `rm!create-company` to create one.'
+                    )
             
             # If player has only one company, skip company selection
             if len(companies) == 1:
@@ -324,7 +336,7 @@ class CompanyCommands(commands.Cog):
                 embed.set_footer(text="Select a category to view available assets")
                 
                 if ctx.interaction:
-                    await ctx.send(embed=embed, view=view, ephemeral=True)
+                    await ctx.interaction.followup.send(embed=embed, view=view, ephemeral=True)
                 else:
                     await ctx.send(embed=embed, view=view)
             
@@ -352,7 +364,7 @@ class CompanyCommands(commands.Cog):
                 embed.set_footer(text="Select a company from the dropdown below")
                 
                 if ctx.interaction:
-                    await ctx.send(embed=embed, view=view, ephemeral=True)
+                    await ctx.interaction.followup.send(embed=embed, view=view, ephemeral=True)
                 else:
                     await ctx.send(embed=embed, view=view)
                 
