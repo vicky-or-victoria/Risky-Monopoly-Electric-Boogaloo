@@ -346,3 +346,29 @@ def schedule_daily_events(bot: 'commands.Bot'):
 def trigger_daily_events(bot: 'commands.Bot'):
     """Backwards compatibility alias #2 - THIS IS WHAT YOUR MAIN.PY IMPORTS"""
     return schedule_income_and_events(bot)
+
+async def force_trigger_events(bot: 'commands.Bot'):
+    """Manually trigger events for all companies immediately (for admin command)"""
+    try:
+        # Generate income for all companies
+        await generate_company_income(bot)
+        
+        # Trigger events for all companies (ignoring frequency timers)
+        companies = await db.get_all_companies()
+        events_processed = 0
+        
+        for company in companies:
+            try:
+                await process_company_event(bot, company)
+                events_processed += 1
+            except Exception as e:
+                print(f'Error processing event for company {company.get("id", "unknown")}: {e}')
+        
+        print(f'✅ Manually triggered events for {events_processed} companies')
+        return events_processed
+        
+    except Exception as e:
+        print(f'Error in force_trigger_events: {e}')
+        import traceback
+        traceback.print_exc()
+        raise
