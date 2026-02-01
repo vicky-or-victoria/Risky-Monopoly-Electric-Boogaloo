@@ -1001,6 +1001,59 @@ class AdminCommands(commands.Cog):
                 traceback.print_exc()
                 await ctx.send(f'❌ Error triggering events: {e}')
     
+    @commands.hybrid_command(name="update-all-company-embeds", description="[ADMIN] Update all company embeds with current format")
+    @is_admin_check()
+    async def update_all_company_embeds(self, ctx: commands.Context):
+        """[ADMIN] Update all company embeds to show company type and current format"""
+        await ctx.defer()
+        
+        try:
+            from events import update_company_embed
+            
+            # Get all companies
+            all_companies = await db.get_all_companies()
+            
+            if not all_companies:
+                return await ctx.send('❌ No companies found!', ephemeral=True)
+            
+            success_count = 0
+            failed_count = 0
+            
+            # Update each company embed
+            for company in all_companies:
+                try:
+                    await update_company_embed(self.bot, company)
+                    success_count += 1
+                except Exception as e:
+                    print(f"Failed to update company #{company['id']}: {e}")
+                    failed_count += 1
+            
+            embed = discord.Embed(
+                title="✅ Company Embeds Updated",
+                description=f"Updated company embed messages with current format",
+                color=discord.Color.green()
+            )
+            embed.add_field(name="✅ Success", value=str(success_count), inline=True)
+            embed.add_field(name="❌ Failed", value=str(failed_count), inline=True)
+            embed.add_field(name="📊 Total", value=str(len(all_companies)), inline=True)
+            embed.add_field(
+                name="📋 Changes Applied",
+                value=(
+                    "• Added/Updated 🏷️ Type field\n"
+                    "• Standardized all embed fields\n"
+                    "• Updated footer text"
+                ),
+                inline=False
+            )
+            
+            await ctx.send(embed=embed)
+            
+        except Exception as e:
+            print(f"Error updating company embeds: {e}")
+            import traceback
+            traceback.print_exc()
+            await ctx.send(f'❌ Error updating company embeds: {e}')
+    
     @commands.hybrid_command(name="list-all-companies", description="[ADMIN] List all companies in the database")
     @is_admin_check()
     async def list_all_companies(self, ctx: commands.Context):
