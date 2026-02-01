@@ -1272,6 +1272,16 @@ async def remove_player_from_corporation(user_id: str):
             DELETE FROM corporation_members WHERE user_id = $1
         ''', user_id)
 
+async def delete_corporation(corp_id: int):
+    """Delete a corporation and all its members"""
+    async with pool.acquire() as conn:
+        # Delete all members first
+        await conn.execute('DELETE FROM corporation_members WHERE corporation_id = $1', corp_id)
+        # Delete all pending invites
+        await conn.execute('DELETE FROM corporation_invites WHERE corporation_id = $1', corp_id)
+        # Delete the corporation
+        await conn.execute('DELETE FROM corporations WHERE id = $1', corp_id)
+
 async def get_corporation_members(corp_id: int) -> List[Dict]:
     """Get all members of a corporation with their balances"""
     async with pool.acquire() as conn:
