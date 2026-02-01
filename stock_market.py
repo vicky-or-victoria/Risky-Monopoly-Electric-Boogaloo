@@ -196,7 +196,7 @@ async def generate_stock_chart() -> Optional[discord.File]:
     Render a 4×3 grid of line charts (one subplot per stock) covering the last 3 hours.
     Returns a discord.File wrapping the PNG, or None if there's not enough history yet.
 
-    Layout: 4 columns × 3 rows = 12 cells.  We have 11 stocks, so the last cell is hidden.
+    Layout: 4 columns × 3 rows = 12 cells for 12 stocks.
     Each subplot shows:
       - The stock's symbol as a title
       - A line coloured green if the stock is currently above its 3-hour-ago price, red otherwise
@@ -220,7 +220,7 @@ async def generate_stock_chart() -> Optional[discord.File]:
     # ── layout constants ─────────────────────────────────────────────
     COLS, ROWS = 4, 3
     fig, axes = plt.subplots(ROWS, COLS, figsize=(14, 9), facecolor='#2f3136')
-    fig.suptitle('📈 Stock Price History (Last 3 Hours)',
+    fig.suptitle('Stock Price History (Last 3 Hours)',
                  color='white', fontsize=15, fontweight='bold', y=0.97)
     axes_flat = axes.flatten()
 
@@ -294,9 +294,6 @@ async def generate_stock_chart() -> Optional[discord.File]:
         price_min, price_max = min(prices), max(prices)
         pad = max((price_max - price_min) * 0.08, 10)
         ax.set_ylim(price_min - pad, price_max + pad)
-
-    # ── hide the unused 12th subplot ─────────────────────────────────
-    axes_flat[11].set_visible(False)
 
     plt.tight_layout(rect=[0, 0, 1, 0.94])  # leave room for suptitle
 
