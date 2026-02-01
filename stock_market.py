@@ -22,7 +22,7 @@ STOCK_COMPANIES = {
     'STARK': {
         'name': 'Stark Industries',
         'symbol': 'STARK',
-        'initial_price': 6000,
+        'initial_price': 800,
         'volatility': 0.08,
         'sector': 'Technology',
         'emoji': '💻'
@@ -30,7 +30,7 @@ STOCK_COMPANIES = {
     'BYD': {
         'name': 'Build Your Dreams',
         'symbol': 'BYD',
-        'initial_price': 3400,
+        'initial_price': 600,
         'volatility': 0.16,
         'sector': 'Automotive',
         'emoji': '🚗'
@@ -38,7 +38,7 @@ STOCK_COMPANIES = {
     'AERO': {
         'name': 'Lock-in Dynamics',
         'symbol': 'AERO',
-        'initial_price': 6100,
+        'initial_price': 750,
         'volatility': 0.15,
         'sector': 'Aerospace',
         'emoji': '✈️'
@@ -46,7 +46,7 @@ STOCK_COMPANIES = {
     'RBNK': {
         'name': 'Riskia Bank',
         'symbol': 'RBNK',
-        'initial_price': 4500,
+        'initial_price': 450,
         'volatility': 0.04,
         'sector': 'Finance',
         'emoji': '🏦'
@@ -54,7 +54,7 @@ STOCK_COMPANIES = {
     'ENRG': {
         'name': 'MegaRisk Energy',
         'symbol': 'ENRG',
-        'initial_price': 3400,
+        'initial_price': 500,
         'volatility': 0.12,
         'sector': 'Energy',
         'emoji': '⚡'
@@ -62,7 +62,7 @@ STOCK_COMPANIES = {
     'FOOD': {
         'name': 'Jollibee Co.',
         'symbol': 'FOOD',
-        'initial_price': 2100,
+        'initial_price': 250,
         'volatility': 0.05,
         'sector': 'Food & Beverage',
         'emoji': '🍔'
@@ -70,7 +70,7 @@ STOCK_COMPANIES = {
     'PHARM': {
         'name': 'BigPharma Company',
         'symbol': 'PHARM',
-        'initial_price': 4400,
+        'initial_price': 600,
         'volatility': 0.09,
         'sector': 'Pharmaceutical',
         'emoji': '💊'
@@ -78,7 +78,7 @@ STOCK_COMPANIES = {
     'PROPTY': {
         'name': 'Risk Properties',
         'symbol': 'PROP',
-        'initial_price': 2200,
+        'initial_price': 450,
         'volatility': 0.07,
         'sector': 'Real Estate',
         'emoji': '🏢'
@@ -102,7 +102,7 @@ STOCK_COMPANIES = {
     'FINANCE': {
         'name': 'Omnarch Assoc.',
         'symbol': 'FINANCE',
-        'initial_price': 2500,
+        'initial_price': 1250,
         'volatility': 0.20,
         'sector': 'Finance and Accounting',
         'emoji': '💵'
