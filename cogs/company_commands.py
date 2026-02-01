@@ -201,11 +201,13 @@ class CompanyCommands(commands.Cog):
             # Ensure player exists
             await db.upsert_player(str(ctx.author.id), ctx.author.name)
             
-            # Check max companies limit
+            # Check max companies limit (fetch live from DB, fall back to env default)
             companies = await db.get_player_companies(str(ctx.author.id))
-            if len(companies) >= self.max_companies:
+            db_max = await db.get_max_companies(str(ctx.guild.id))
+            max_companies = db_max if db_max is not None else self.max_companies
+            if len(companies) >= max_companies:
                 return await ctx.send(
-                    f'❌ You\'ve reached the maximum of {self.max_companies} companies! Use `rm!disband-company` to disband one first.',
+                    f'❌ You\'ve reached the maximum of {max_companies} companies! Use `rm!disband-company` to disband one first.',
                     ephemeral=True if ctx.interaction else False
                 )
             
@@ -377,9 +379,12 @@ class CompanyCommands(commands.Cog):
                     ephemeral=True if ctx.interaction else False
                 )
             
+            db_max = await db.get_max_companies(str(ctx.guild.id))
+            max_companies = db_max if db_max is not None else self.max_companies
+
             embed = discord.Embed(
                 title=f"🏢 {ctx.author.name}'s Companies",
-                description=f"You own **{len(companies)}** / {self.max_companies} companies",
+                description=f"You own **{len(companies)}** / {max_companies} companies",
                 color=discord.Color.blue()
             )
             
