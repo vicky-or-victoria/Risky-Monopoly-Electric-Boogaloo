@@ -49,24 +49,41 @@ class LoanTierSelect(discord.ui.Select):
         await self.view.show_company_selection(interaction, tier)
 
 class CompanyCollateralSelect(discord.ui.Select):
-    def __init__(self, companies, tier):
+    def __init__(self, companies, tier, already_pledged_ids=None):
         self.tier = tier
         
         # Filter companies to only show those matching the loan tier
-        matching_companies = [c for c in companies if c['rank'] == tier]
+        # AND exclude any already pledged as collateral on an active loan
+        already_pledged_ids = already_pledged_ids or set()
+        matching_companies = [
+            c for c in companies
+            if c['rank'] == tier and c['id'] not in already_pledged_ids
+        ]
         
         options = []
         
-        # Only show "No Collateral" if no matching companies exist
+        # Only show placeholder option if no eligible companies remain
         if not matching_companies:
-            options.append(
-                discord.SelectOption(
-                    label="No Matching Companies",
-                    description=f"You need a Rank {tier} company for this loan tier",
-                    value="none",
-                    emoji="❌"
+            all_of_tier = [c for c in companies if c['rank'] == tier]
+            if all_of_tier:
+                # Companies exist but every one is already pledged
+                options.append(
+                    discord.SelectOption(
+                        label="No Available Companies",
+                        description=f"All your Rank {tier} companies are already pledged as collateral",
+                        value="none",
+                        emoji="❌"
+                    )
                 )
-            )
+            else:
+                options.append(
+                    discord.SelectOption(
+                        label="No Matching Companies",
+                        description=f"You need a Rank {tier} company for this loan tier",
+                        value="none",
+                        emoji="❌"
+                    )
+                )
         else:
             # Add matching company options
             for i, company in enumerate(matching_companies):
@@ -90,7 +107,8 @@ class CompanyCollateralSelect(discord.ui.Select):
     async def callback(self, interaction: discord.Interaction):
         if self.values[0] == "none":
             return await interaction.response.send_message(
-                f"❌ You need a Rank {self.tier} company to request this loan tier!",
+                f"❌ No eligible Rank {self.tier} company available. "
+                f"Either you don't have one, or all of them are already pledged as collateral on active loans.",
                 ephemeral=True
             )
         
@@ -126,11 +144,25 @@ class LoanRequestView(discord.ui.View):
         # Filter companies to matching rank
         matching_companies = [c for c in self.companies if c['rank'] == tier]
         
-        # Check if user has a matching rank company
+        # Check if user has a matching rank company at all
         if not matching_companies:
             return await interaction.response.send_message(
                 f"❌ You need a **Rank {tier}** company to request this loan tier!\n\n"
                 f"💡 Create a Rank {tier} company first, then come back to request this loan.",
+                ephemeral=True
+            )
+        
+        # Fetch company IDs already pledged as collateral on active (unpaid) loans
+        active_loans = await db.get_player_loans(str(self.user_id), unpaid_only=True)
+        already_pledged_ids = {loan['company_id'] for loan in active_loans if loan.get('company_id')}
+        
+        # Filter out pledged companies for the eligibility check
+        available_companies = [c for c in matching_companies if c['id'] not in already_pledged_ids]
+        
+        if not available_companies:
+            return await interaction.response.send_message(
+                f"❌ All of your Rank {tier} companies are already pledged as collateral on active loans.\n\n"
+                f"💡 Pay off an existing loan first, or create a new Rank {tier} company.",
                 ephemeral=True
             )
         
@@ -140,8 +172,8 @@ class LoanRequestView(discord.ui.View):
         new_view.interest_rate = self.interest_rate
         new_view.process_loan = self.process_loan
         
-        # Add company selector
-        company_select = CompanyCollateralSelect(self.companies, tier)
+        # Add company selector (exclude already-pledged companies)
+        company_select = CompanyCollateralSelect(self.companies, tier, already_pledged_ids)
         new_view.add_item(company_select)
         
         # Add cancel button
@@ -172,7 +204,7 @@ class LoanRequestView(discord.ui.View):
         embed = discord.Embed(
             title=f"🏦 Loan Request - Tier {tier}",
             description=f"You're requesting a **${loan_info['amount']:,}** loan.\n\n"
-                       f"✅ You have **{len(matching_companies)}** Rank {tier} compan{'y' if len(matching_companies) == 1 else 'ies'}.",
+                       f"✅ You have **{len(available_companies)}** available Rank {tier} compan{'y' if len(available_companies) == 1 else 'ies'}.",
             color=discord.Color.blue()
         )
         embed.add_field(name="💰 Amount", value=f"${loan_info['amount']:,}", inline=True)
@@ -225,6 +257,16 @@ class LoanRequestView(discord.ui.View):
                     ephemeral=True
                 )
             
+            # Verify this company is not already pledged on another active loan
+            existing_loans = await db.get_player_loans(str(self.user_id), unpaid_only=True)
+            for existing in existing_loans:
+                if existing.get('company_id') == company_id:
+                    return await interaction.followup.send(
+                        f"❌ **{company['name']}** is already pledged as collateral on Loan #{existing['id']}. "
+                        f"Pay off that loan first or choose a different company.",
+                        ephemeral=True
+                    )
+            
             # Calculate loan terms
             total_owed = int(amount * (1 + self.interest_rate / 100))
             
@@ -253,16 +295,21 @@ class LoanRequestView(discord.ui.View):
             if isinstance(interaction.channel, discord.Thread):
                 forum_channel = interaction.channel.parent
             
-            # Create thread
-            thread = await forum_channel.create_thread(
+            # Create thread in the forum
+            # ForumChannel.create_thread() returns (Thread, Message) —
+            # the Message is the starter message we passed via `content=`.
+            thread_result = await forum_channel.create_thread(
                 name=f"💳 Loan - {interaction.user.name} - ${amount:,} ({tier})",
                 content=f"<@{self.user_id}>'s loan is being processed...",
                 auto_archive_duration=10080  # 7 days
             )
             
-            # Handle tuple return
-            if isinstance(thread, tuple):
-                thread = thread[0]
+            # Unwrap the tuple: thread object and its starter message
+            if isinstance(thread_result, tuple):
+                thread, starter_message = thread_result
+            else:
+                thread = thread_result
+                starter_message = None
             
             # Send the embed
             embed_message = await thread.send(embed=loan_embed)
@@ -285,11 +332,15 @@ class LoanRequestView(discord.ui.View):
             await db.update_player_balance(str(self.user_id), amount)
             player = await db.get_player(str(self.user_id))
             
-            # Edit the initial message
-            async for message in thread.history(limit=10, oldest_first=True):
-                if message.author == interaction.client.user and "being processed" in message.content:
-                    await message.edit(content=f"✅ Loan #{loan['id']} approved for <@{self.user_id}>")
-                    break
+            # Edit the starter message directly (it was captured from the tuple above)
+            if starter_message:
+                await starter_message.edit(content=f"✅ Loan #{loan['id']} approved for <@{self.user_id}>")
+            else:
+                # Fallback: try fetching the first message if starter_message wasn't available
+                async for message in thread.history(limit=10, oldest_first=True):
+                    if "being processed" in message.content:
+                        await message.edit(content=f"✅ Loan #{loan['id']} approved for <@{self.user_id}>")
+                        break
             
             # Send success message
             success_embed = discord.Embed(
