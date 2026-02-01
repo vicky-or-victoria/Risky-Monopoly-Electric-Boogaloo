@@ -6,7 +6,7 @@ from discord.ext import commands
 import os
 
 import database as db
-from events import trigger_daily_events
+from events import trigger_daily_events, force_trigger_events
 
 class LeaderboardCommands(commands.Cog):
     def __init__(self, bot):
@@ -904,7 +904,7 @@ class AdminCommands(commands.Cog):
         """[ADMIN] Trigger daily events for all companies"""
         async with ctx.typing():
             try:
-                await trigger_daily_events(self.bot)
+                events_count = await force_trigger_events(self.bot)
                 
                 # Update leaderboards
                 leaderboard_cog = self.bot.get_cog('LeaderboardCommands')
@@ -912,9 +912,11 @@ class AdminCommands(commands.Cog):
                     for guild in self.bot.guilds:
                         await leaderboard_cog.update_persistent_leaderboard(str(guild.id))
                 
-                await ctx.send('✅ Daily events triggered for all companies and leaderboards updated!')
+                await ctx.send(f'✅ Daily events triggered for {events_count} companies and leaderboards updated!')
             except Exception as e:
                 print(f"Error triggering events: {e}")
+                import traceback
+                traceback.print_exc()
                 await ctx.send(f'❌ Error triggering events: {e}')
     
     @commands.hybrid_command(name="list-all-companies", description="[ADMIN] List all companies in the database")
