@@ -13,6 +13,21 @@ class CompanyWars(commands.Cog):
         self.bot = bot
         self.active_wars = {}  # war_id: war_data
     
+    def rank_to_number(self, rank: str) -> int:
+        """Convert rank letter to number for comparison (higher number = better rank)"""
+        rank_map = {
+            'F': 0,
+            'E': 1,
+            'D': 2,
+            'C': 3,
+            'B': 4,
+            'A': 5,
+            'S': 6,
+            'SS': 7,
+            'SSR': 8
+        }
+        return rank_map.get(rank.upper(), 0)
+    
     @app_commands.command(name="raid-company", description="⚔️ Initiate a raid on another company")
     @app_commands.describe(
         target_company_id="ID of the company to raid"
@@ -53,7 +68,9 @@ class CompanyWars(commands.Cog):
                 return
         
         # Check if companies can raid based on rank difference
-        rank_diff = abs(int(attacker_company['rank']) - int(target_company['rank']))
+        attacker_rank_num = self.rank_to_number(attacker_company['rank'])
+        target_rank_num = self.rank_to_number(target_company['rank'])
+        rank_diff = abs(attacker_rank_num - target_rank_num)
         if rank_diff > 2:
             await interaction.followup.send(
                 f"❌ You can only raid companies within 2 ranks of yours! (Your rank: {attacker_company['rank']}, Their rank: {target_company['rank']})",
@@ -188,7 +205,8 @@ class CompanyWars(commands.Cog):
             return
         
         # War cost (must be Rank B or higher)
-        if int(attacker_company['rank']) > 2:  # Rank C or lower
+        attacker_rank_num = self.rank_to_number(attacker_company['rank'])
+        if attacker_rank_num < 4:  # Rank B = 4, so anything below is C or lower
             await interaction.followup.send("❌ Your company must be Rank B or higher to declare war!", ephemeral=True)
             return
         
