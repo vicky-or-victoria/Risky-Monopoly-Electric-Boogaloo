@@ -1,4 +1,4 @@
-"""Economy commands: balance, loans, collect"""
+# Economy commands: balance, loans, collect
 
 import discord
 from discord import app_commands
@@ -313,7 +313,7 @@ class LoanRequestView(discord.ui.View):
             await embed_message.pin()
             
             # Create loan in database
-            due_date = discord.utils.utcnow() + timedelta(days=due_days)
+            due_date = datetime.utcnow() + timedelta(days=due_days)
             loan = await db.create_loan(
                 borrower_id=str(self.user_id),
                 company_id=company_id,
