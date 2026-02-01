@@ -296,20 +296,17 @@ class LoanRequestView(discord.ui.View):
                 forum_channel = interaction.channel.parent
             
             # Create thread in the forum
-            # ForumChannel.create_thread() returns (Thread, Message) —
-            # the Message is the starter message we passed via `content=`.
+            # ForumChannel.create_thread() returns a ThreadWithMessage object
+            # with .thread and .message attributes (not a tuple).
             thread_result = await forum_channel.create_thread(
                 name=f"💳 Loan - {interaction.user.name} - ${amount:,} ({tier})",
                 content=f"<@{self.user_id}>'s loan is being processed...",
                 auto_archive_duration=10080  # 7 days
             )
             
-            # Unwrap the tuple: thread object and its starter message
-            if isinstance(thread_result, tuple):
-                thread, starter_message = thread_result
-            else:
-                thread = thread_result
-                starter_message = None
+            # Extract thread and its starter message from the result object
+            thread = thread_result.thread
+            starter_message = thread_result.message
             
             # Send the embed
             embed_message = await thread.send(embed=loan_embed)
@@ -332,15 +329,17 @@ class LoanRequestView(discord.ui.View):
             await db.update_player_balance(str(self.user_id), amount)
             player = await db.get_player(str(self.user_id))
             
-            # Edit the starter message directly (it was captured from the tuple above)
+            # Edit the starter message to show approval
             if starter_message:
                 await starter_message.edit(content=f"✅ Loan #{loan['id']} approved for <@{self.user_id}>")
             else:
-                # Fallback: try fetching the first message if starter_message wasn't available
-                async for message in thread.history(limit=10, oldest_first=True):
-                    if "being processed" in message.content:
-                        await message.edit(content=f"✅ Loan #{loan['id']} approved for <@{self.user_id}>")
-                        break
+                # Safety fallback: fetch the thread's first message by ID
+                try:
+                    first_msg = await thread.fetch_message(thread.id)
+                    if first_msg and "being processed" in first_msg.content:
+                        await first_msg.edit(content=f"✅ Loan #{loan['id']} approved for <@{self.user_id}>")
+                except Exception as e:
+                    print(f"Warning: could not edit starter message: {e}")
             
             # Send success message
             success_embed = discord.Embed(
