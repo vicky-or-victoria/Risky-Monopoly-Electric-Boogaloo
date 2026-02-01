@@ -19,93 +19,101 @@ if TYPE_CHECKING:
 
 # Stock market companies (NPCs)
 STOCK_COMPANIES = {
-    'TECH': {
+    'STARK': {
         'name': 'Stark Industries',
         'symbol': 'STARK',
-        'initial_price': 1000,
+        'initial_price': 6000,
         'volatility': 0.08,
         'sector': 'Technology',
         'emoji': '💻'
     },
-    'AUTO': {
-        'name': 'AutoDrive Motors',
-        'symbol': 'AUTO',
-        'initial_price': 850,
-        'volatility': 0.06,
+    'BYD': {
+        'name': 'Build Your Dreams',
+        'symbol': 'BYD',
+        'initial_price': 3400,
+        'volatility': 0.16,
         'sector': 'Automotive',
         'emoji': '🚗'
     },
     'AERO': {
-        'name': 'Locked-In Risk Dynamics',
-        'symbol': 'LMRT',
-        'initial_price': 1500,
-        'volatility': 0.10,
+        'name': 'Lock-in Dynamics',
+        'symbol': 'AERO',
+        'initial_price': 6100,
+        'volatility': 0.15,
         'sector': 'Aerospace',
         'emoji': '✈️'
     },
-    'BANK': {
-        'name': 'National Bank of Risk Universalis',
+    'RBNK': {
+        'name': 'Riskia Bank',
         'symbol': 'RBNK',
-        'initial_price': 500,
+        'initial_price': 4500,
         'volatility': 0.04,
         'sector': 'Finance',
         'emoji': '🏦'
     },
     'ENRG': {
-        'name': 'Mega Risk Energy Company',
-        'symbol': 'MREC',
-        'initial_price': 750,
+        'name': 'MegaRisk Energy',
+        'symbol': 'ENRG',
+        'initial_price': 3400,
         'volatility': 0.12,
         'sector': 'Energy',
         'emoji': '⚡'
     },
     'FOOD': {
-        'name': 'FoodChain Global',
+        'name': 'Jollibee Co.',
         'symbol': 'FOOD',
-        'initial_price': 400,
+        'initial_price': 2100,
         'volatility': 0.05,
         'sector': 'Food & Beverage',
         'emoji': '🍔'
     },
     'PHARM': {
-        'name': 'PharmaLife Inc',
+        'name': 'BigPharma Company',
         'symbol': 'PHARM',
-        'initial_price': 1200,
+        'initial_price': 4400,
         'volatility': 0.09,
         'sector': 'Pharmaceutical',
         'emoji': '💊'
     },
-    'PROP': {
-        'name': 'PropertyPlus Real Estate',
+    'PROPTY': {
+        'name': 'Risk Properties',
         'symbol': 'PROP',
-        'initial_price': 950,
+        'initial_price': 2200,
         'volatility': 0.07,
         'sector': 'Real Estate',
         'emoji': '🏢'
     },
     'MEDIA': {
-        'name': 'MediaStream Networks',
+        'name': 'Ursodosal Truth',
         'symbol': 'MEDIA',
-        'initial_price': 600,
+        'initial_price': 1200,
         'volatility': 0.11,
         'sector': 'Media & Entertainment',
         'emoji': '📺'
     },
     'RETAIL': {
-        'name': 'RetailMart Chain',
+        'name': 'RiskMart LLC.',
         'symbol': 'RETAIL',
-        'initial_price': 350,
+        'initial_price': 750,
         'volatility': 0.06,
         'sector': 'Retail',
         'emoji': '🛒'
     },
     'FINANCE': {
-        'name': 'Omn and Arch Associates',
-        'symbol': 'OAAF',
-        'initial_price': 1250,
-        'volatility': 0.25,
+        'name': 'Omnarch Assoc.',
+        'symbol': 'FINANCE',
+        'initial_price': 2500,
+        'volatility': 0.20,
         'sector': 'Finance and Accounting',
         'emoji': '💵'
+    },
+    'SPACE': {
+        'name': 'Omnarch Assoc.',
+        'symbol': 'SPACE',
+        'initial_price': 12500,
+        'volatility': 0.30,
+        'sector': 'Space Venture Industry',
+        'emoji': '🚀'
     }
 }
 
