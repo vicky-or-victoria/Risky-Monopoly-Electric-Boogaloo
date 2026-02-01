@@ -342,6 +342,7 @@ async def init_database():
                 "ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS registration_channel_id VARCHAR(255)",
                 "ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS registration_message_id VARCHAR(255)",
                 "ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS registration_role_id VARCHAR(255)",
+                "ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS max_companies INTEGER DEFAULT 3",
             ]
             for migration in migrations:
                 await conn.execute(migration)
@@ -1412,3 +1413,24 @@ async def get_registration_settings(guild_id: str) -> Optional[Dict]:
             FROM guild_settings WHERE guild_id = $1
         ''', guild_id)
         return dict(row) if row else None
+
+
+# ==================== MAX COMPANIES ====================
+
+async def get_max_companies(guild_id: str) -> Optional[int]:
+    """Get max companies per player for a guild. Returns None if not set."""
+    async with pool.acquire() as conn:
+        return await conn.fetchval(
+            'SELECT max_companies FROM guild_settings WHERE guild_id = $1',
+            guild_id
+        )
+
+async def set_max_companies(guild_id: str, max_companies: int):
+    """Set max companies per player for a guild"""
+    async with pool.acquire() as conn:
+        await conn.execute('''
+            INSERT INTO guild_settings (guild_id, max_companies)
+            VALUES ($1, $2)
+            ON CONFLICT (guild_id)
+            DO UPDATE SET max_companies = $2
+        ''', guild_id, max_companies)
