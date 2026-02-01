@@ -821,17 +821,19 @@ class CompanyNameModal(discord.ui.Modal, title="Name Your Company"):
                         # Create initial embed for thread
                         initial_embed = discord.Embed(
                             title=f"🏢 {custom_name}",
-                            description=f"**Rank {self.rank} {self.company_data['name']}**\nOwned by <@{self.user_id}>",
+                            description=f"**Rank {self.rank} Company**\nOwned by <@{self.user_id}>",
                             color=get_rank_color(self.rank)
                         )
-                        initial_embed.add_field(name="🆔 ID", value=f"#{company['id']}", inline=True)
+                        initial_embed.add_field(name="🏷️ Type", value=self.company_data['name'], inline=True)
                         initial_embed.add_field(name="💵 Income/30s", value=f"${self.company_data['income']:,}", inline=True)
                         initial_embed.add_field(name="📊 Income/Min", value=f"${self.company_data['income'] * 2:,}", inline=True)
                         initial_embed.add_field(name="🕐 Income/Hour", value=f"${self.company_data['income'] * 120:,}", inline=True)
-                        initial_embed.add_field(name="🏢 Type", value=self.company_data['name'], inline=True)
-                        initial_embed.add_field(name="⭐ Rank", value=self.rank, inline=True)
-                        initial_embed.add_field(name="📈 Current Income", value=f"${self.company_data['income']:,}/30s", inline=True)
-                        initial_embed.set_footer(text="Use rm!upgrade-company to purchase assets!")
+                        initial_embed.add_field(name="💰 Base Income", value=f"${self.company_data['income']:,}/30s", inline=True)
+                        initial_embed.add_field(name="⭐ Reputation", value="50/100", inline=True)
+                        initial_embed.add_field(name="🎯 Assets", value="0", inline=True)
+                        initial_embed.add_field(name="🆔 Company ID", value=f"#{company['id']}", inline=True)
+                        initial_embed.add_field(name="📅 Established", value=discord.utils.format_dt(discord.utils.utcnow(), 'D'), inline=True)
+                        initial_embed.set_footer(text="Use rm!upgrade-company in this thread to purchase assets! • Updates every 30s")
                         initial_embed.timestamp = discord.utils.utcnow()
                         
                         print("Creating forum thread...")
