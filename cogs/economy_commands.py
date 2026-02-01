@@ -325,6 +325,9 @@ class LoanRequestView(discord.ui.View):
                 thread_id=str(thread.id)
             )
             
+            # Store the embed message ID in the database
+            await db.set_loan_embed_message(loan['id'], str(embed_message.id))
+            
             # Give money to player
             await db.update_player_balance(str(self.user_id), amount)
             player = await db.get_player(str(self.user_id))
@@ -781,6 +784,7 @@ class EconomyCommands(commands.Cog):
                 
                 if thread:
                     try:
+                        # Update the embed message
                         message = await thread.fetch_message(int(loan['embed_message_id']))
                         
                         # Update the embed to show PAID
@@ -798,10 +802,18 @@ class EconomyCommands(commands.Cog):
                             new_embed.timestamp = discord.utils.utcnow()
                             
                             await message.edit(embed=new_embed)
+                        
+                        # Update the starter message (thread's first message)
+                        try:
+                            starter_message = await thread.fetch_message(thread.id)
+                            if starter_message:
+                                await starter_message.edit(content=f"✅ Loan #{loan_id} - PAID IN FULL by <@{loan['borrower_id']}>")
+                        except Exception as e:
+                            print(f"Error updating starter message: {e}")
                             
-                            # Archive and lock the thread
-                            await thread.edit(archived=True, locked=True)
-                            print(f"✅ Closed and locked loan thread for loan #{loan_id}")
+                        # Archive and lock the thread
+                        await thread.edit(archived=True, locked=True)
+                        print(f"✅ Closed and locked loan thread for loan #{loan_id}")
                     except Exception as e:
                         print(f"Error updating loan embed: {e}")
             except Exception as e:
