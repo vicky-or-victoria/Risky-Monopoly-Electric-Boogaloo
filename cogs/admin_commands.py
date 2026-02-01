@@ -595,6 +595,10 @@ class AdminCommands(commands.Cog):
         if max_companies < 1:
             return await ctx.send('❌ Max companies must be at least 1!', ephemeral=True)
         
+        # Persist to database so it survives restarts
+        await db.set_max_companies(str(ctx.guild.id), max_companies)
+
+        # Also update in-memory value on the cog for immediate effect
         company_cog = self.bot.get_cog('CompanyCommands')
         if company_cog:
             company_cog.max_companies = max_companies
@@ -1074,7 +1078,9 @@ class AdminCommands(commands.Cog):
         economy_cog = self.bot.get_cog('EconomyCommands')
         
         if company_cog:
-            embed.add_field(name="🏢 Max Companies", value=str(company_cog.max_companies), inline=True)
+            db_max = await db.get_max_companies(str(ctx.guild.id))
+            display_max = db_max if db_max is not None else company_cog.max_companies
+            embed.add_field(name="🏢 Max Companies", value=str(display_max), inline=True)
         if economy_cog:
             embed.add_field(name="💳 Loan Interest Rate", value=f"{economy_cog.interest_rate}%", inline=True)
         
