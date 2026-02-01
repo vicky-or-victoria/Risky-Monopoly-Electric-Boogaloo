@@ -236,7 +236,7 @@ class Corporations(commands.Cog):
         # Leaders can't leave (must transfer leadership first)
         if corp['leader_id'] == str(interaction.user.id):
             await interaction.response.send_message(
-                "❌ As the leader, you must transfer leadership with `/transfer-corporation-leadership` before leaving!",
+                "❌ As the leader, you must transfer leadership with `/transfer-corporation-leadership` before leaving, or use `/disband-corporation` to delete it!",
                 ephemeral=True
             )
             return
@@ -251,6 +251,83 @@ class Corporations(commands.Cog):
         
         await interaction.response.send_message(embed=embed)
     
+    @app_commands.command(name="disband-corporation", description="💥 Disband your corporation (Leader only)")
+    async def disband_corporation(self, interaction: discord.Interaction):
+        """Disband your corporation - Leader only"""
+        corp = await db.get_player_corporation(str(interaction.user.id))
+        if not corp:
+            await interaction.response.send_message("❌ You're not in a corporation!", ephemeral=True)
+            return
+        
+        # Only leader can disband
+        if corp['leader_id'] != str(interaction.user.id):
+            await interaction.response.send_message(
+                "❌ Only the corporation leader can disband the corporation!",
+                ephemeral=True
+            )
+            return
+        
+        # Get member count for confirmation
+        members = await db.get_corporation_members(corp['id'])
+        member_count = len(members)
+        
+        # Create confirmation view
+        class DisbandConfirmView(discord.ui.View):
+            def __init__(self):
+                super().__init__(timeout=60)
+                self.value = None
+            
+            @discord.ui.button(label="Confirm Disband", style=discord.ButtonStyle.danger)
+            async def confirm(self, button_interaction: discord.Interaction, button: discord.ui.Button):
+                if button_interaction.user.id != interaction.user.id:
+                    await button_interaction.response.send_message("❌ Only the leader can confirm this!", ephemeral=True)
+                    return
+                
+                self.value = True
+                self.stop()
+                
+                # Delete the corporation
+                await db.delete_corporation(corp['id'])
+                
+                embed = discord.Embed(
+                    title="💥 Corporation Disbanded",
+                    description=f"**[{corp['tag']}] {corp['name']}** has been disbanded!",
+                    color=discord.Color.red()
+                )
+                embed.add_field(name="👥 Members Released", value=str(member_count), inline=True)
+                embed.add_field(name="👑 Former Leader", value=interaction.user.mention, inline=True)
+                
+                await button_interaction.response.edit_message(embed=embed, view=None)
+            
+            @discord.ui.button(label="Cancel", style=discord.ButtonStyle.gray)
+            async def cancel(self, button_interaction: discord.Interaction, button: discord.ui.Button):
+                if button_interaction.user.id != interaction.user.id:
+                    await button_interaction.response.send_message("❌ Only the leader can cancel this!", ephemeral=True)
+                    return
+                
+                self.value = False
+                self.stop()
+                
+                await button_interaction.response.edit_message(
+                    content="❌ Disbandment cancelled.",
+                    embed=None,
+                    view=None
+                )
+        
+        view = DisbandConfirmView()
+        
+        embed = discord.Embed(
+            title="⚠️ Confirm Corporation Disbandment",
+            description=f"Are you sure you want to disband **[{corp['tag']}] {corp['name']}**?\n\n"
+                       f"This will:\n"
+                       f"• Remove all {member_count} member(s)\n"
+                       f"• Delete all corporation data\n"
+                       f"• **Cannot be undone!**",
+            color=discord.Color.red()
+        )
+        
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+    
     @app_commands.command(name="corporation-leaderboard", description="🏆 View corporation rankings")
     async def corporation_leaderboard(self, interaction: discord.Interaction):
         """Display corporation leaderboard"""
@@ -260,22 +337,25 @@ class Corporations(commands.Cog):
             await interaction.response.send_message("No corporations have been created yet!", ephemeral=True)
             return
         
+        # Build formatted leaderboard text
+        leaderboard_text = "```\n"
+        for i, corp in enumerate(corps, 1):
+            medal = {1: "🥇", 2: "🥈", 3: "🥉"}.get(i, "  ")
+            rank_str = str(i).rjust(3)
+            # Truncate and pad name to 25 characters
+            corp_name = f"[{corp['tag']}] {corp['name']}"[:25].ljust(25)
+            wealth = f"${corp['total_wealth']:,}"
+            leaderboard_text += f"{medal} #{rank_str} | {corp_name} | {wealth}\n"
+        leaderboard_text += "```"
+        
         embed = discord.Embed(
             title="🏆 Corporation Leaderboard",
-            description="Top corporations by total member wealth",
+            description=f"Top {len(corps)} corporations by total member wealth\n{leaderboard_text}",
             color=discord.Color.gold()
         )
         
-        for i, corp in enumerate(corps, 1):
-            medal = {1: "🥇", 2: "🥈", 3: "🥉"}.get(i, f"{i}.")
-            
-            embed.add_field(
-                name=f"{medal} [{corp['tag']}] {corp['name']}",
-                value=f"💰 ${corp['total_wealth']:,}\n👥 {corp['member_count']} members\n👑 <@{corp['leader_id']}>",
-                inline=False
-            )
-        
         embed.set_footer(text=f"Total corporations: {len(corps)}")
+        embed.timestamp = discord.utils.utcnow()
         
         await interaction.response.send_message(embed=embed)
     
@@ -351,27 +431,25 @@ class Corporations(commands.Cog):
             # Create initial leaderboard embed
             corps = await db.get_corporation_leaderboard(str(interaction.guild.id), limit=25)
             
+            # Build formatted leaderboard text
+            if corps:
+                leaderboard_text = "```\n"
+                for i, corp in enumerate(corps[:25], 1):
+                    medal = {1: "🥇", 2: "🥈", 3: "🥉"}.get(i, "  ")
+                    rank_str = str(i).rjust(3)
+                    # Truncate and pad name to 25 characters
+                    corp_name = f"[{corp['tag']}] {corp['name']}"[:25].ljust(25)
+                    wealth = f"${corp['total_wealth']:,}"
+                    leaderboard_text += f"{medal} #{rank_str} | {corp_name} | {wealth}\n"
+                leaderboard_text += "```"
+            else:
+                leaderboard_text = "No corporations yet!"
+            
             embed = discord.Embed(
                 title="🏆 Corporation Leaderboard",
-                description="Top corporations by total member wealth\n*Updates every 30 seconds*",
+                description=f"Top 25 corporations by total member wealth\n{leaderboard_text}",
                 color=discord.Color.gold()
             )
-            
-            if corps:
-                for i, corp in enumerate(corps[:10], 1):  # Show top 10
-                    medal = {1: "🥇", 2: "🥈", 3: "🥉"}.get(i, f"{i}.")
-                    
-                    embed.add_field(
-                        name=f"{medal} [{corp['tag']}] {corp['name']}",
-                        value=f"💰 ${corp['total_wealth']:,} | 👥 {corp['member_count']} members | 👑 <@{corp['leader_id']}>",
-                        inline=False
-                    )
-            else:
-                embed.add_field(
-                    name="No Corporations Yet",
-                    value="Create a corporation with `/create-corporation`!",
-                    inline=False
-                )
             
             embed.set_footer(text=f"Total corporations: {len(corps)} | Last updated")
             embed.timestamp = discord.utils.utcnow()
@@ -392,8 +470,8 @@ class Corporations(commands.Cog):
                 name="📋 Features",
                 value=(
                     "• Updates automatically every 30 seconds\n"
-                    "• Shows top 10 corporations by total member wealth\n"
-                    "• Displays member count and leader for each corporation"
+                    "• Shows top 25 corporations by total member wealth\n"
+                    "• Formatted like the wealth leaderboard"
                 ),
                 inline=False
             )
