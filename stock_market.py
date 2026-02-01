@@ -108,7 +108,7 @@ STOCK_COMPANIES = {
         'emoji': '💵'
     },
     'SPACE': {
-        'name': 'Omnarch Assoc.',
+        'name': 'NAZA Space',
         'symbol': 'SPACE',
         'initial_price': 12500,
         'volatility': 0.30,
