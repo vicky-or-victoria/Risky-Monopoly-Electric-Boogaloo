@@ -257,28 +257,26 @@ async def update_corporation_leaderboard(bot: 'commands.Bot', guild_id: str):
         # Get corporation leaderboard data
         corps = await db.get_corporation_leaderboard(guild_id, limit=25)
         
+        # Build formatted leaderboard text
+        if corps:
+            leaderboard_text = "```\n"
+            for i, corp in enumerate(corps[:25], 1):
+                medal = {1: "🥇", 2: "🥈", 3: "🥉"}.get(i, "  ")
+                rank_str = str(i).rjust(3)
+                # Truncate and pad name to 25 characters
+                corp_name = f"[{corp['tag']}] {corp['name']}"[:25].ljust(25)
+                wealth = f"${corp['total_wealth']:,}"
+                leaderboard_text += f"{medal} #{rank_str} | {corp_name} | {wealth}\n"
+            leaderboard_text += "```"
+        else:
+            leaderboard_text = "No corporations yet!"
+        
         # Build the embed
         embed = discord.Embed(
             title="🏆 Corporation Leaderboard",
-            description="Top corporations by total member wealth\n*Updates every 30 seconds*",
+            description=f"Top 25 corporations by total member wealth\n{leaderboard_text}",
             color=discord.Color.gold()
         )
-        
-        if corps:
-            for i, corp in enumerate(corps[:10], 1):  # Show top 10
-                medal = {1: "🥇", 2: "🥈", 3: "🥉"}.get(i, f"{i}.")
-                
-                embed.add_field(
-                    name=f"{medal} [{corp['tag']}] {corp['name']}",
-                    value=f"💰 ${corp['total_wealth']:,} | 👥 {corp['member_count']} members | 👑 <@{corp['leader_id']}>",
-                    inline=False
-                )
-        else:
-            embed.add_field(
-                name="No Corporations Yet",
-                value="Create a corporation with `/create-corporation`!",
-                inline=False
-            )
         
         embed.set_footer(text=f"Total corporations: {len(corps)} | Last updated")
         embed.timestamp = discord.utils.utcnow()
@@ -336,18 +334,14 @@ async def update_company_leaderboard(bot: 'commands.Bot', guild_id: str):
         # Sort by income (already sorted from DB, but filter may have changed order)
         guild_companies.sort(key=lambda c: c['current_income'], reverse=True)
         
-        # Build the embed
-        embed = discord.Embed(
-            title="🏢 Company Leaderboard",
-            description="Top companies by income rate\n*Updates every 30 seconds*",
-            color=discord.Color.blue()
-        )
-        
+        # Build formatted leaderboard text
         if guild_companies:
-            for i, company in enumerate(guild_companies[:10], 1):  # Show top 10
-                medal = {1: "🥇", 2: "🥈", 3: "🥉"}.get(i, f"{i}.")
+            leaderboard_text = "```\n"
+            for i, company in enumerate(guild_companies[:25], 1):
+                medal = {1: "🥇", 2: "🥈", 3: "🥉"}.get(i, "  ")
+                rank_str = str(i).rjust(3)
                 
-                # Get rank emoji/color indicator
+                # Rank emoji
                 rank_emoji = {
                     'SSR': '💎',
                     'SS': '🌟',
@@ -360,17 +354,20 @@ async def update_company_leaderboard(bot: 'commands.Bot', guild_id: str):
                     'F': '⬜'
                 }.get(company['rank'], '📊')
                 
-                embed.add_field(
-                    name=f"{medal} {rank_emoji} {company['name']} (Rank {company['rank']})",
-                    value=f"💰 ${company['current_income']:,}/30s | 👤 <@{company['owner_id']}>",
-                    inline=False
-                )
+                # Truncate and pad name to 20 characters
+                company_name = f"{rank_emoji} {company['name']}"[:20].ljust(20)
+                income = f"${company['current_income']:,}/30s"
+                leaderboard_text += f"{medal} #{rank_str} | {company_name} | {income}\n"
+            leaderboard_text += "```"
         else:
-            embed.add_field(
-                name="No Companies Yet",
-                value="Create a company with `/create-company`!",
-                inline=False
-            )
+            leaderboard_text = "No companies yet!"
+        
+        # Build the embed
+        embed = discord.Embed(
+            title="🏢 Company Leaderboard",
+            description=f"Top 25 companies by income rate\n{leaderboard_text}",
+            color=discord.Color.blue()
+        )
         
         embed.set_footer(text=f"Total companies: {len(guild_companies)} | Last updated")
         embed.timestamp = discord.utils.utcnow()
