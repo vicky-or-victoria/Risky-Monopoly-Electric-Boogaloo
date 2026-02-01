@@ -829,6 +829,9 @@ class CompanyNameModal(discord.ui.Modal, title="Name Your Company"):
                                 print("Pinning thread message...")
                                 await thread_message.message.pin()
                                 print("Message pinned")
+                                # Persist the embed message ID so events.py can update it later
+                                await db.set_company_embed_message(company['id'], str(thread_message.message.id))
+                                print("Embed message ID saved")
                             except discord.Forbidden:
                                 print("Failed to pin message: Missing PIN_MESSAGES permission")
                             except Exception as pin_error:
@@ -1155,6 +1158,16 @@ class AssetSelectionView(discord.ui.View):
                 asset['cost']
             )
             
+            # Apply the income boost to the company in the database
+            updated_company = await db.update_company_income(self.company['id'], asset['boost'])
+            
+            # Update the pinned embed in the company's thread
+            try:
+                from events import update_company_embed
+                await update_company_embed(interaction.client, updated_company)
+            except Exception as embed_err:
+                print(f"Warning: could not update company embed after upgrade: {embed_err}")
+            
             # Success embed
             embed = discord.Embed(
                 title="✅ Asset Purchased!",
@@ -1179,12 +1192,12 @@ class AssetSelectionView(discord.ui.View):
             )
             embed.add_field(
                 name="📊 New Company Income",
-                value=f"${self.company['current_income'] + asset['boost']:,}/30s",
+                value=f"${updated_company['current_income']:,}/30s",
                 inline=True
             )
             embed.add_field(
                 name="🕐 New Income/Hour",
-                value=f"${(self.company['current_income'] + asset['boost']) * 120:,}",
+                value=f"${updated_company['current_income'] * 120:,}",
                 inline=True
             )
             
