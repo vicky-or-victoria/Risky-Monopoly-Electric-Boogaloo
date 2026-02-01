@@ -343,6 +343,8 @@ async def init_database():
                 "ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS registration_message_id VARCHAR(255)",
                 "ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS registration_role_id VARCHAR(255)",
                 "ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS max_companies INTEGER DEFAULT 3",
+                "ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS company_leaderboard_channel_id VARCHAR(255)",
+                "ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS company_leaderboard_message_id VARCHAR(255)",
             ]
             for migration in migrations:
                 await conn.execute(migration)
@@ -1346,6 +1348,66 @@ async def get_corporation_leaderboard_message(guild_id: str) -> Optional[str]:
     async with pool.acquire() as conn:
         return await conn.fetchval(
             'SELECT corporation_leaderboard_message_id FROM guild_settings WHERE guild_id = $1',
+            guild_id
+        )
+
+# ==================== COMPANY LEADERBOARD ====================
+
+async def get_company_leaderboard(guild_id: str, limit: int = 25) -> List[Dict]:
+    """Get company leaderboard by income for a specific guild"""
+    async with pool.acquire() as conn:
+        # Get all companies in the guild by checking their thread's guild
+        rows = await conn.fetch('''
+            SELECT 
+                c.id,
+                c.name,
+                c.rank,
+                c.current_income,
+                c.owner_id,
+                c.thread_id
+            FROM companies c
+            WHERE c.thread_id IS NOT NULL
+            ORDER BY c.current_income DESC
+            LIMIT $1
+        ''', limit)
+        
+        # Filter by guild (we need to check which threads belong to this guild)
+        # This is done in the calling code since we need bot access
+        return [dict(row) for row in rows]
+
+async def set_company_leaderboard_channel(guild_id: str, channel_id: str):
+    """Set company leaderboard display channel"""
+    async with pool.acquire() as conn:
+        await conn.execute('''
+            INSERT INTO guild_settings (guild_id, company_leaderboard_channel_id)
+            VALUES ($1, $2)
+            ON CONFLICT (guild_id)
+            DO UPDATE SET company_leaderboard_channel_id = $2
+        ''', guild_id, channel_id)
+
+async def get_company_leaderboard_channel(guild_id: str) -> Optional[str]:
+    """Get company leaderboard display channel"""
+    async with pool.acquire() as conn:
+        return await conn.fetchval(
+            'SELECT company_leaderboard_channel_id FROM guild_settings WHERE guild_id = $1',
+            guild_id
+        )
+
+async def set_company_leaderboard_message(guild_id: str, message_id: str):
+    """Set company leaderboard display message"""
+    async with pool.acquire() as conn:
+        await conn.execute('''
+            INSERT INTO guild_settings (guild_id, company_leaderboard_message_id)
+            VALUES ($1, $2)
+            ON CONFLICT (guild_id)
+            DO UPDATE SET company_leaderboard_message_id = $2
+        ''', guild_id, message_id)
+
+async def get_company_leaderboard_message(guild_id: str) -> Optional[str]:
+    """Get company leaderboard display message"""
+    async with pool.acquire() as conn:
+        return await conn.fetchval(
+            'SELECT company_leaderboard_message_id FROM guild_settings WHERE guild_id = $1',
             guild_id
         )
 
