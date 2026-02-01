@@ -582,6 +582,88 @@ class AdminCommands(commands.Cog):
             print(f"Error setting up leaderboard: {e}")
             await ctx.send(f'❌ Error setting up leaderboard: {e}')
     
+    @commands.hybrid_command(name="setup-company-leaderboard", description="[ADMIN] Setup persistent company leaderboard in current channel")
+    @is_admin_check()
+    async def setup_company_leaderboard(self, ctx: commands.Context):
+        """[ADMIN] Setup persistent company leaderboard in current channel"""
+        await ctx.defer()
+        
+        try:
+            # Get all companies and filter by guild
+            all_companies = await db.get_company_leaderboard(str(ctx.guild.id), limit=100)
+            
+            guild_companies = []
+            for company in all_companies:
+                if company.get('thread_id'):
+                    try:
+                        thread = self.bot.get_channel(int(company['thread_id']))
+                        if not thread:
+                            thread = await self.bot.fetch_channel(int(company['thread_id']))
+                        
+                        if thread and hasattr(thread, 'guild') and thread.guild.id == ctx.guild.id:
+                            guild_companies.append(company)
+                    except:
+                        pass
+            
+            # Sort by income
+            guild_companies.sort(key=lambda c: c['current_income'], reverse=True)
+            
+            # Build the embed
+            embed = discord.Embed(
+                title="🏢 Company Leaderboard",
+                description="Top companies by income rate\n*Updates every 30 seconds*",
+                color=discord.Color.blue()
+            )
+            
+            if guild_companies:
+                for i, company in enumerate(guild_companies[:10], 1):
+                    medal = {1: "🥇", 2: "🥈", 3: "🥉"}.get(i, f"{i}.")
+                    
+                    rank_emoji = {
+                        'SSR': '💎',
+                        'SS': '🌟',
+                        'S': '⭐',
+                        'A': '🔷',
+                        'B': '🔶',
+                        'C': '🟦',
+                        'D': '🟩',
+                        'E': '🟨',
+                        'F': '⬜'
+                    }.get(company['rank'], '📊')
+                    
+                    embed.add_field(
+                        name=f"{medal} {rank_emoji} {company['name']} (Rank {company['rank']})",
+                        value=f"💰 ${company['current_income']:,}/30s | 👤 <@{company['owner_id']}>",
+                        inline=False
+                    )
+            else:
+                embed.add_field(
+                    name="No Companies Yet",
+                    value="Create a company with `/create-company`!",
+                    inline=False
+                )
+            
+            embed.set_footer(text=f"Total companies: {len(guild_companies)} | Last updated")
+            embed.timestamp = discord.utils.utcnow()
+            
+            # Send the message
+            message = await ctx.send(embed=embed)
+            
+            # Save to database
+            await db.set_company_leaderboard_channel(str(ctx.guild.id), str(ctx.channel.id))
+            await db.set_company_leaderboard_message(str(ctx.guild.id), str(message.id))
+            
+            await ctx.send(
+                '✅ Company leaderboard setup complete! This message will update automatically every 30 seconds.',
+                ephemeral=True
+            )
+            
+        except Exception as e:
+            print(f"Error setting up company leaderboard: {e}")
+            import traceback
+            traceback.print_exc()
+            await ctx.send(f'❌ Error setting up company leaderboard: {e}')
+    
     @commands.hybrid_command(name="set-max-companies", description="[ADMIN] Set maximum companies per player")
     @is_admin_check()
     async def set_max_companies(self, ctx: commands.Context, max_companies: int):
