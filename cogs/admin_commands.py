@@ -608,17 +608,14 @@ class AdminCommands(commands.Cog):
             # Sort by income
             guild_companies.sort(key=lambda c: c['current_income'], reverse=True)
             
-            # Build the embed
-            embed = discord.Embed(
-                title="🏢 Company Leaderboard",
-                description="Top companies by income rate\n*Updates every 30 seconds*",
-                color=discord.Color.blue()
-            )
-            
+            # Build formatted leaderboard text
             if guild_companies:
-                for i, company in enumerate(guild_companies[:10], 1):
-                    medal = {1: "🥇", 2: "🥈", 3: "🥉"}.get(i, f"{i}.")
+                leaderboard_text = "```\n"
+                for i, company in enumerate(guild_companies[:25], 1):
+                    medal = {1: "🥇", 2: "🥈", 3: "🥉"}.get(i, "  ")
+                    rank_str = str(i).rjust(3)
                     
+                    # Rank emoji
                     rank_emoji = {
                         'SSR': '💎',
                         'SS': '🌟',
@@ -631,19 +628,22 @@ class AdminCommands(commands.Cog):
                         'F': '⬜'
                     }.get(company['rank'], '📊')
                     
-                    embed.add_field(
-                        name=f"{medal} {rank_emoji} {company['name']} (Rank {company['rank']})",
-                        value=f"💰 ${company['current_income']:,}/30s | 👤 <@{company['owner_id']}>",
-                        inline=False
-                    )
+                    # Truncate and pad name to 20 characters
+                    company_name = f"{rank_emoji} {company['name']}"[:20].ljust(20)
+                    income = f"${company['current_income']:,}/30s"
+                    leaderboard_text += f"{medal} #{rank_str} | {company_name} | {income}\n"
+                leaderboard_text += "```"
             else:
-                embed.add_field(
-                    name="No Companies Yet",
-                    value="Create a company with `/create-company`!",
-                    inline=False
-                )
+                leaderboard_text = "No companies yet!"
             
-            embed.set_footer(text=f"Total companies: {len(guild_companies)} | Last updated")
+            # Build the embed
+            embed = discord.Embed(
+                title="🏢 Company Leaderboard",
+                description=f"Top 25 companies by income rate\n{leaderboard_text}",
+                color=discord.Color.blue()
+            )
+            
+            embed.set_footer(text=f"Total companies: {len(guild_companies)} | Updates every 30 seconds")
             embed.timestamp = discord.utils.utcnow()
             
             # Send the message
