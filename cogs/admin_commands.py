@@ -780,6 +780,7 @@ class AdminCommands(commands.Cog):
                 
                 if thread:
                     try:
+                        # Update the embed message
                         message = await thread.fetch_message(int(loan['embed_message_id']))
                         
                         # Update the embed to show FORGIVEN
@@ -797,7 +798,16 @@ class AdminCommands(commands.Cog):
                             new_embed.timestamp = discord.utils.utcnow()
                             
                             await message.edit(embed=new_embed)
-                            await thread.edit(archived=True, locked=True)
+                        
+                        # Update the starter message (thread's first message)
+                        try:
+                            starter_message = await thread.fetch_message(thread.id)
+                            if starter_message:
+                                await starter_message.edit(content=f"💚 Loan #{loan_id} - FORGIVEN by admin")
+                        except Exception as e:
+                            print(f"Error updating starter message: {e}")
+                            
+                        await thread.edit(archived=True, locked=True)
                     except Exception as e:
                         print(f"Error updating loan embed: {e}")
             except Exception as e:
