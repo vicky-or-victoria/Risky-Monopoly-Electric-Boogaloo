@@ -289,6 +289,98 @@ async def update_corporation_leaderboard(bot: 'commands.Bot', guild_id: str):
     except Exception as e:
         print(f"Error updating corporation leaderboard for guild {guild_id}: {e}")
 
+async def update_company_leaderboard(bot: 'commands.Bot', guild_id: str):
+    """Update the company leaderboard for a specific guild"""
+    try:
+        # Get the channel and message IDs
+        channel_id = await db.get_company_leaderboard_channel(guild_id)
+        message_id = await db.get_company_leaderboard_message(guild_id)
+        
+        if not channel_id or not message_id:
+            return  # Leaderboard not set up for this guild
+        
+        # Get the channel
+        channel = bot.get_channel(int(channel_id))
+        if not channel:
+            try:
+                channel = await bot.fetch_channel(int(channel_id))
+            except:
+                return
+        
+        if not channel:
+            return
+        
+        # Get the message
+        try:
+            message = await channel.fetch_message(int(message_id))
+        except:
+            return
+        
+        # Get all companies
+        all_companies = await db.get_company_leaderboard(guild_id, limit=100)
+        
+        # Filter companies that belong to this guild
+        guild_companies = []
+        for company in all_companies:
+            if company.get('thread_id'):
+                try:
+                    thread = bot.get_channel(int(company['thread_id']))
+                    if not thread:
+                        thread = await bot.fetch_channel(int(company['thread_id']))
+                    
+                    if thread and hasattr(thread, 'guild') and str(thread.guild.id) == guild_id:
+                        guild_companies.append(company)
+                except:
+                    pass
+        
+        # Sort by income (already sorted from DB, but filter may have changed order)
+        guild_companies.sort(key=lambda c: c['current_income'], reverse=True)
+        
+        # Build the embed
+        embed = discord.Embed(
+            title="🏢 Company Leaderboard",
+            description="Top companies by income rate\n*Updates every 30 seconds*",
+            color=discord.Color.blue()
+        )
+        
+        if guild_companies:
+            for i, company in enumerate(guild_companies[:10], 1):  # Show top 10
+                medal = {1: "🥇", 2: "🥈", 3: "🥉"}.get(i, f"{i}.")
+                
+                # Get rank emoji/color indicator
+                rank_emoji = {
+                    'SSR': '💎',
+                    'SS': '🌟',
+                    'S': '⭐',
+                    'A': '🔷',
+                    'B': '🔶',
+                    'C': '🟦',
+                    'D': '🟩',
+                    'E': '🟨',
+                    'F': '⬜'
+                }.get(company['rank'], '📊')
+                
+                embed.add_field(
+                    name=f"{medal} {rank_emoji} {company['name']} (Rank {company['rank']})",
+                    value=f"💰 ${company['current_income']:,}/30s | 👤 <@{company['owner_id']}>",
+                    inline=False
+                )
+        else:
+            embed.add_field(
+                name="No Companies Yet",
+                value="Create a company with `/create-company`!",
+                inline=False
+            )
+        
+        embed.set_footer(text=f"Total companies: {len(guild_companies)} | Last updated")
+        embed.timestamp = discord.utils.utcnow()
+        
+        # Edit the message
+        await message.edit(embed=embed)
+        
+    except Exception as e:
+        print(f"Error updating company leaderboard for guild {guild_id}: {e}")
+
 
 def schedule_income_and_events(bot: 'commands.Bot'):
     """Schedule BOTH income generation (every 30s) AND event processing (every 30s check)"""
@@ -326,6 +418,16 @@ def schedule_income_and_events(bot: 'commands.Bot'):
                             print(f'Error updating corporation leaderboard for guild {guild.id}: {e}')
                 except Exception as e:
                     print(f'Error in corporation leaderboard update: {e}')
+                
+                # Update all company leaderboards
+                try:
+                    for guild in bot.guilds:
+                        try:
+                            await update_company_leaderboard(bot, str(guild.id))
+                        except Exception as e:
+                            print(f'Error updating company leaderboard for guild {guild.id}: {e}')
+                except Exception as e:
+                    print(f'Error in company leaderboard update: {e}')
                 
                 # Wait 30 seconds before next cycle
                 await asyncio.sleep(30)
