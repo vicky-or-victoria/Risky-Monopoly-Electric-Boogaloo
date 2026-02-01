@@ -448,8 +448,21 @@ class CompanyCommands(commands.Cog):
                     ephemeral=True if ctx.interaction else False
                 )
             
-            # Show company selection for disbanding
-            view = DisbandCompanyView(ctx.author.id, companies)
+            # Fetch which companies are currently pledged as loan collateral
+            active_loans = await db.get_player_loans(str(ctx.author.id), unpaid_only=True)
+            pledged_ids = {loan['company_id'] for loan in active_loans if loan.get('company_id')}
+
+            # If every company is pledged, nothing can be disbanded
+            disbandable = [c for c in companies if c['id'] not in pledged_ids]
+            if not disbandable:
+                return await ctx.send(
+                    '❌ All of your companies are pledged as collateral on active loans. '
+                    'Pay off your loans before disbanding any company.',
+                    ephemeral=True if ctx.interaction else False
+                )
+
+            # Show company selection for disbanding (pledged companies are filtered out)
+            view = DisbandCompanyView(ctx.author.id, companies, pledged_ids)
             
             embed = discord.Embed(
                 title="⚠️ Disband Company",
@@ -1280,14 +1293,17 @@ class AssetSelectionView(discord.ui.View):
 
 class DisbandCompanyView(discord.ui.View):
     """View for disbanding a company"""
-    def __init__(self, user_id: int, companies: list):
+    def __init__(self, user_id: int, companies: list, pledged_company_ids: set = None):
         super().__init__(timeout=180)
         self.user_id = user_id
         self.companies = companies
+        self.pledged_company_ids = pledged_company_ids or set()
         
-        # Create select menu
+        # Create select menu — exclude companies pledged as loan collateral
         options = []
         for company in companies:
+            if company['id'] in self.pledged_company_ids:
+                continue  # skip pledged companies entirely
             options.append(discord.SelectOption(
                 label=company['name'],
                 description=f"Rank {company['rank']} • ${company['current_income']:,}/30s",
@@ -1317,6 +1333,18 @@ class DisbandCompanyView(discord.ui.View):
         if not company:
             return await interaction.response.send_message(
                 "❌ Company not found!", 
+                ephemeral=True
+            )
+        
+        # Re-check: block if this company is currently pledged as loan collateral
+        active_loans = await db.get_player_loans(str(self.user_id), unpaid_only=True)
+        pledged_ids = {loan['company_id'] for loan in active_loans if loan.get('company_id')}
+        if company['id'] in pledged_ids:
+            # find the loan it's tied to for the error message
+            blocking_loan = next(l for l in active_loans if l.get('company_id') == company['id'])
+            return await interaction.response.send_message(
+                f"❌ **{company['name']}** is pledged as collateral on Loan #{blocking_loan['id']}. "
+                f"Pay off that loan before disbanding this company.",
                 ephemeral=True
             )
         
