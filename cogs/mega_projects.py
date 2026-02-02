@@ -109,6 +109,21 @@ class MegaProjects(commands.Cog):
                 ephemeral=True
             )
         
+        # Check if command is being used in the corporation's forum post
+        if not isinstance(interaction.channel, discord.Thread):
+            return await interaction.response.send_message(
+                "❌ This command can only be used in your corporation's forum post!",
+                ephemeral=True
+            )
+        
+        # Verify this is the correct corporation's forum post
+        forum_corp = await db.get_corporation_by_forum_post(str(interaction.channel.id))
+        if not forum_corp or forum_corp['id'] != corp['id']:
+            return await interaction.response.send_message(
+                "❌ This command can only be used in your own corporation's forum post!",
+                ephemeral=True
+            )
+        
         await interaction.response.defer()
         
         # Check if corporation already has an active project
@@ -206,6 +221,21 @@ class MegaProjects(commands.Cog):
         if not corp:
             return await interaction.response.send_message(
                 "❌ You must be in a corporation to contribute to mega projects!",
+                ephemeral=True
+            )
+        
+        # Check if command is being used in the corporation's forum post
+        if not isinstance(interaction.channel, discord.Thread):
+            return await interaction.response.send_message(
+                "❌ This command can only be used in your corporation's forum post!",
+                ephemeral=True
+            )
+        
+        # Verify this is the correct corporation's forum post
+        forum_corp = await db.get_corporation_by_forum_post(str(interaction.channel.id))
+        if not forum_corp or forum_corp['id'] != corp['id']:
+            return await interaction.response.send_message(
+                "❌ This command can only be used in your own corporation's forum post!",
                 ephemeral=True
             )
         
