@@ -203,6 +203,17 @@ async def init_database():
             
             await conn.execute('CREATE INDEX IF NOT EXISTS idx_player_stocks_user ON player_stocks(user_id)')
             
+            # Frozen stocks tracking (for stocks that crashed to $0)
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS frozen_stocks (
+                    symbol VARCHAR(10) PRIMARY KEY,
+                    frozen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    unfreezes_at TIMESTAMP NOT NULL
+                )
+            ''')
+            
+            await conn.execute('CREATE INDEX IF NOT EXISTS idx_frozen_stocks_unfreezes ON frozen_stocks(unfreezes_at)')
+            
             # ==================== COMPANY WARS/RAIDS ====================
             
             # Check and fix company_raids table schema
@@ -1773,3 +1784,76 @@ async def apply_tax_reduction_buff(user_id: str, base_tax: int) -> int:
             return int(base_tax * (1 - reduction))
         
         return base_tax
+
+# ==================== FROZEN STOCKS (CRASH SYSTEM) ====================
+
+async def freeze_stock(symbol: str, duration_minutes: int = 30):
+    """Freeze a stock that crashed to $0 for a specified duration"""
+    async with pool.acquire() as conn:
+        unfreezes_at = datetime.utcnow() + timedelta(minutes=duration_minutes)
+        await conn.execute('''
+            INSERT INTO frozen_stocks (symbol, frozen_at, unfreezes_at)
+            VALUES ($1, CURRENT_TIMESTAMP, $2)
+            ON CONFLICT (symbol)
+            DO UPDATE SET frozen_at = CURRENT_TIMESTAMP, unfreezes_at = $2
+        ''', symbol, unfreezes_at)
+
+async def is_stock_frozen(symbol: str) -> bool:
+    """Check if a stock is currently frozen"""
+    async with pool.acquire() as conn:
+        result = await conn.fetchval('''
+            SELECT EXISTS(
+                SELECT 1 FROM frozen_stocks
+                WHERE symbol = $1 AND unfreezes_at > CURRENT_TIMESTAMP
+            )
+        ''', symbol)
+        return result
+
+async def get_frozen_stocks() -> List[Dict]:
+    """Get all currently frozen stocks"""
+    async with pool.acquire() as conn:
+        rows = await conn.fetch('''
+            SELECT symbol, frozen_at, unfreezes_at
+            FROM frozen_stocks
+            WHERE unfreezes_at > CURRENT_TIMESTAMP
+            ORDER BY unfreezes_at ASC
+        ''')
+        return [dict(row) for row in rows]
+
+async def get_stocks_ready_to_unfreeze() -> List[str]:
+    """Get stocks that are ready to be unfrozen"""
+    async with pool.acquire() as conn:
+        rows = await conn.fetch('''
+            SELECT symbol FROM frozen_stocks
+            WHERE unfreezes_at <= CURRENT_TIMESTAMP
+        ''')
+        return [row['symbol'] for row in rows]
+
+async def unfreeze_stock(symbol: str):
+    """Unfreeze a stock and remove it from frozen_stocks table"""
+    async with pool.acquire() as conn:
+        await conn.execute('''
+            DELETE FROM frozen_stocks WHERE symbol = $1
+        ''', symbol)
+
+async def clear_all_player_stock_holdings(symbol: str) -> int:
+    """
+    Clear all player holdings for a specific stock (when it crashes to $0).
+    Returns the number of affected players.
+    """
+    async with pool.acquire() as conn:
+        result = await conn.execute('''
+            DELETE FROM player_stocks WHERE symbol = $1
+        ''', symbol)
+        # Extract number of rows deleted from result
+        return int(result.split()[-1]) if result else 0
+
+async def get_all_players_with_stock(symbol: str) -> List[Dict]:
+    """Get all players who own shares of a specific stock"""
+    async with pool.acquire() as conn:
+        rows = await conn.fetch('''
+            SELECT user_id, shares, average_price
+            FROM player_stocks
+            WHERE symbol = $1
+        ''', symbol)
+        return [dict(row) for row in rows]
