@@ -4,10 +4,9 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 import os
-from datetime import datetime, timedelta
 
 import database as db
-from events import trigger_daily_events
+from events import trigger_daily_events, force_trigger_events
 
 class LeaderboardCommands(commands.Cog):
     def __init__(self, bot):
@@ -59,8 +58,8 @@ class LeaderboardCommands(commands.Cog):
         
         # Build leaderboard text
         leaderboard_text = "```\n"
-        for idx, player in enumerate(players, start=offset + 1):
-            rank = idx
+        for player in players:
+            rank = player['rank']
             medal = self.get_medal_emoji(rank)
             username = player['username'][:20].ljust(20)
             balance = f"${player['balance']:,}"
@@ -126,8 +125,8 @@ class LeaderboardCommands(commands.Cog):
                 leaderboard_text = "No players with balance yet!"
             else:
                 leaderboard_text = "```\n"
-                for idx, player in enumerate(players, start=1):
-                    rank = idx
+                for player in players:
+                    rank = player['rank']
                     medal = self.get_medal_emoji(rank)
                     username = player['username'][:20].ljust(20)
                     balance = f"${player['balance']:,}"
@@ -553,8 +552,8 @@ class AdminCommands(commands.Cog):
                 leaderboard_text = "No players with balance yet!"
             else:
                 leaderboard_text = "```\n"
-                for idx, player in enumerate(players, start=1):
-                    rank = idx
+                for player in players:
+                    rank = player['rank']
                     medal = leaderboard_cog.get_medal_emoji(rank)
                     username = player['username'][:20].ljust(20)
                     balance = f"${player['balance']:,}"
@@ -583,6 +582,88 @@ class AdminCommands(commands.Cog):
             print(f"Error setting up leaderboard: {e}")
             await ctx.send(f'❌ Error setting up leaderboard: {e}')
     
+    @commands.hybrid_command(name="setup-company-leaderboard", description="[ADMIN] Setup persistent company leaderboard in current channel")
+    @is_admin_check()
+    async def setup_company_leaderboard(self, ctx: commands.Context):
+        """[ADMIN] Setup persistent company leaderboard in current channel"""
+        await ctx.defer()
+        
+        try:
+            # Get all companies and filter by guild
+            all_companies = await db.get_company_leaderboard(str(ctx.guild.id), limit=100)
+            
+            guild_companies = []
+            for company in all_companies:
+                if company.get('thread_id'):
+                    try:
+                        thread = self.bot.get_channel(int(company['thread_id']))
+                        if not thread:
+                            thread = await self.bot.fetch_channel(int(company['thread_id']))
+                        
+                        if thread and hasattr(thread, 'guild') and thread.guild.id == ctx.guild.id:
+                            guild_companies.append(company)
+                    except:
+                        pass
+            
+            # Sort by income
+            guild_companies.sort(key=lambda c: c['current_income'], reverse=True)
+            
+            # Build formatted leaderboard text
+            if guild_companies:
+                leaderboard_text = "```\n"
+                for i, company in enumerate(guild_companies[:25], 1):
+                    medal = {1: "🥇", 2: "🥈", 3: "🥉"}.get(i, "  ")
+                    rank_str = str(i).rjust(3)
+                    
+                    # Rank emoji
+                    rank_emoji = {
+                        'SSR': '💎',
+                        'SS': '🌟',
+                        'S': '⭐',
+                        'A': '🔷',
+                        'B': '🔶',
+                        'C': '🟦',
+                        'D': '🟩',
+                        'E': '🟨',
+                        'F': '⬜'
+                    }.get(company['rank'], '📊')
+                    
+                    # Truncate and pad name to 20 characters
+                    company_name = f"{rank_emoji} {company['name']}"[:20].ljust(20)
+                    income = f"${company['current_income']:,}/30s"
+                    leaderboard_text += f"{medal} #{rank_str} | {company_name} | {income}\n"
+                leaderboard_text += "```"
+            else:
+                leaderboard_text = "No companies yet!"
+            
+            # Build the embed
+            embed = discord.Embed(
+                title="🏢 Company Leaderboard",
+                description=f"Top 25 companies by income rate\n{leaderboard_text}",
+                color=discord.Color.blue()
+            )
+            
+            embed.set_footer(text=f"Total companies: {len(guild_companies)} | Updates every 30 seconds")
+            embed.timestamp = discord.utils.utcnow()
+            
+            # Send the message
+            message = await ctx.send(embed=embed)
+            
+            # Save to database
+            await db.set_company_leaderboard_channel(str(ctx.guild.id), str(ctx.channel.id))
+            await db.set_company_leaderboard_message(str(ctx.guild.id), str(message.id))
+            
+            await ctx.send(
+                '✅ Company leaderboard setup complete! This message will update automatically every 30 seconds.',
+                ephemeral=True
+            )
+            
+        except Exception as e:
+            print(f"Error setting up company leaderboard: {e}")
+            import traceback
+            traceback.print_exc()
+            await ctx.send(f'❌ Error setting up company leaderboard: {e}')
+    
     @commands.hybrid_command(name="set-max-companies", description="[ADMIN] Set maximum companies per player")
     @is_admin_check()
     async def set_max_companies(self, ctx: commands.Context, max_companies: int):
@@ -596,6 +677,10 @@ class AdminCommands(commands.Cog):
         if max_companies < 1:
             return await ctx.send('❌ Max companies must be at least 1!', ephemeral=True)
         
+        # Persist to database so it survives restarts
+        await db.set_max_companies(str(ctx.guild.id), max_companies)
+
+        # Also update in-memory value on the cog for immediate effect
         company_cog = self.bot.get_cog('CompanyCommands')
         if company_cog:
             company_cog.max_companies = max_companies
@@ -640,14 +725,18 @@ class AdminCommands(commands.Cog):
         amount: int
             Amount to give
         """
-        await db.upsert_player(str(user.id), user.name)
-        await db.update_player_balance(str(user.id), amount)
-        
-        player = await db.get_player(str(user.id))
-        
-        await ctx.send(
-            f'✅ Gave ${amount:,} to {user.mention}. Their new balance is ${player["balance"]:,}',
-        )
+        try:
+            await db.upsert_player(str(user.id), user.name)
+            await db.update_player_balance(str(user.id), amount)
+            
+            player = await db.get_player(str(user.id))
+            
+            await ctx.send(
+                f'✅ Gave ${amount:,} to {user.mention}. Their new balance is ${player["balance"]:,}',
+            )
+        except Exception as e:
+            print(f"Error giving money: {e}")
+            await ctx.send(f'❌ Error giving money: {e}', ephemeral=True)
     
     @commands.hybrid_command(name="set-balance", description="[ADMIN] Set a player's balance to a specific amount")
     @is_admin_check()
@@ -664,12 +753,25 @@ class AdminCommands(commands.Cog):
         if amount < 0:
             return await ctx.send('❌ Balance cannot be negative!', ephemeral=True)
         
-        await db.upsert_player(str(user.id), user.name)
-        player = await db.set_player_balance(str(user.id), amount)
-        
-        await ctx.send(
-            f'✅ Set {user.mention}\'s balance to ${amount:,}',
-        )
+        try:
+            await db.upsert_player(str(user.id), user.name)
+            
+            # Get current balance
+            player = await db.get_player(str(user.id))
+            current_balance = player['balance'] if player else 0
+            
+            # Calculate difference and update
+            difference = amount - current_balance
+            await db.update_player_balance(str(user.id), difference)
+            
+            await ctx.send(
+                f'✅ Set {user.mention}\'s balance to ${amount:,}',
+            )
+        except Exception as e:
+            print(f"Error setting balance: {e}")
+            import traceback
+            traceback.print_exc()
+            await ctx.send(f'❌ Error setting balance: {e}', ephemeral=True)
     
     @commands.hybrid_command(name="force-disband", description="[ADMIN] Force disband a company by ID")
     @is_admin_check()
@@ -686,7 +788,7 @@ class AdminCommands(commands.Cog):
         if not company:
             return await ctx.send(f'❌ Company #{company_id} not found!', ephemeral=True)
         
-        # Archive and lock the thread if it exists
+        # Delete the thread if it exists
         if company['thread_id']:
             try:
                 thread = self.bot.get_channel(int(company['thread_id']))
@@ -694,9 +796,10 @@ class AdminCommands(commands.Cog):
                     thread = await self.bot.fetch_channel(int(company['thread_id']))
                 
                 if thread:
+                    # Send notification before deleting
                     embed = discord.Embed(
                         title="🔨 COMPANY DISBANDED BY ADMIN",
-                        description=f"**{company['name']}** has been forcibly disbanded by an administrator.",
+                        description=f"**{company['name']}** has been forcibly disbanded by an administrator.\n\nThis thread will be deleted in 5 seconds.",
                         color=discord.Color.dark_red()
                     )
                     embed.add_field(name="🏢 Company", value=company['name'], inline=True)
@@ -705,7 +808,13 @@ class AdminCommands(commands.Cog):
                     embed.timestamp = discord.utils.utcnow()
                     
                     await thread.send(embed=embed)
-                    await thread.edit(archived=True, locked=True)
+                    
+                    # Wait 5 seconds then delete
+                    await asyncio.sleep(5)
+                    await thread.delete()
+                    print(f"Deleted thread {thread.id} for company {company['name']}")
+            except Exception as e:
+                print(f"Error deleting company thread: {e}")
             except Exception as e:
                 print(f"Error closing company thread: {e}")
         
@@ -753,6 +862,7 @@ class AdminCommands(commands.Cog):
                 
                 if thread:
                     try:
+                        # Update the embed message
                         message = await thread.fetch_message(int(loan['embed_message_id']))
                         
                         # Update the embed to show FORGIVEN
@@ -770,7 +880,16 @@ class AdminCommands(commands.Cog):
                             new_embed.timestamp = discord.utils.utcnow()
                             
                             await message.edit(embed=new_embed)
-                            await thread.edit(archived=True, locked=True)
+                        
+                        # Update the starter message (thread's first message)
+                        try:
+                            starter_message = await thread.fetch_message(thread.id)
+                            if starter_message:
+                                await starter_message.edit(content=f"💚 Loan #{loan_id} - FORGIVEN by admin")
+                        except Exception as e:
+                            print(f"Error updating starter message: {e}")
+                            
+                        await thread.edit(archived=True, locked=True)
                     except Exception as e:
                         print(f"Error updating loan embed: {e}")
             except Exception as e:
@@ -865,21 +984,75 @@ class AdminCommands(commands.Cog):
     @is_admin_check()
     async def force_event(self, ctx: commands.Context):
         """[ADMIN] Trigger daily events for all companies"""
+        async with ctx.typing():
+            try:
+                events_count = await force_trigger_events(self.bot)
+                
+                # Update leaderboards
+                leaderboard_cog = self.bot.get_cog('LeaderboardCommands')
+                if leaderboard_cog:
+                    for guild in self.bot.guilds:
+                        await leaderboard_cog.update_persistent_leaderboard(str(guild.id))
+                
+                await ctx.send(f'✅ Daily events triggered for {events_count} companies and leaderboards updated!')
+            except Exception as e:
+                print(f"Error triggering events: {e}")
+                import traceback
+                traceback.print_exc()
+                await ctx.send(f'❌ Error triggering events: {e}')
+    
+    @commands.hybrid_command(name="update-all-company-embeds", description="[ADMIN] Update all company embeds with current format")
+    @is_admin_check()
+    async def update_all_company_embeds(self, ctx: commands.Context):
+        """[ADMIN] Update all company embeds to show company type and current format"""
         await ctx.defer()
         
         try:
-            await trigger_daily_events(self.bot)
+            from events import update_company_embed
             
-            # Update leaderboards
-            leaderboard_cog = self.bot.get_cog('LeaderboardCommands')
-            if leaderboard_cog:
-                for guild in self.bot.guilds:
-                    await leaderboard_cog.update_persistent_leaderboard(str(guild.id))
+            # Get all companies
+            all_companies = await db.get_all_companies()
             
-            await ctx.send('✅ Daily events triggered for all companies and leaderboards updated!')
+            if not all_companies:
+                return await ctx.send('❌ No companies found!', ephemeral=True)
+            
+            success_count = 0
+            failed_count = 0
+            
+            # Update each company embed
+            for company in all_companies:
+                try:
+                    await update_company_embed(self.bot, company)
+                    success_count += 1
+                except Exception as e:
+                    print(f"Failed to update company #{company['id']}: {e}")
+                    failed_count += 1
+            
+            embed = discord.Embed(
+                title="✅ Company Embeds Updated",
+                description=f"Updated company embed messages with current format",
+                color=discord.Color.green()
+            )
+            embed.add_field(name="✅ Success", value=str(success_count), inline=True)
+            embed.add_field(name="❌ Failed", value=str(failed_count), inline=True)
+            embed.add_field(name="📊 Total", value=str(len(all_companies)), inline=True)
+            embed.add_field(
+                name="📋 Changes Applied",
+                value=(
+                    "• Added/Updated 🏷️ Type field\n"
+                    "• Standardized all embed fields\n"
+                    "• Updated footer text"
+                ),
+                inline=False
+            )
+            
+            await ctx.send(embed=embed)
+            
         except Exception as e:
-            print(f"Error triggering events: {e}")
-            await ctx.send(f'❌ Error triggering events: {e}')
+            print(f"Error updating company embeds: {e}")
+            import traceback
+            traceback.print_exc()
+            await ctx.send(f'❌ Error updating company embeds: {e}')
     
     @commands.hybrid_command(name="list-all-companies", description="[ADMIN] List all companies in the database")
     @is_admin_check()
@@ -984,12 +1157,77 @@ class AdminCommands(commands.Cog):
         embed.timestamp = discord.utils.utcnow()
         await ctx.send(embed=embed)
     
+    @commands.hybrid_command(name="server-settings", description="[ADMIN] View current server settings")
+    @is_admin_check()
+    async def server_settings(self, ctx: commands.Context):
+        """[ADMIN] View current server settings"""
+        settings = await db.get_guild_settings(str(ctx.guild.id))
+        
+        embed = discord.Embed(
+            title="⚙️ Server Settings",
+            description="Current configuration for Risky Monopoly",
+            color=discord.Color.blue()
+        )
+        
+        if settings:
+            if settings.get('company_forum_id'):
+                embed.add_field(
+                    name="🏢 Company Forum",
+                    value=f"<#{settings['company_forum_id']}>",
+                    inline=False
+                )
+            else:
+                embed.add_field(name="🏢 Company Forum", value="Not set", inline=False)
+            
+            if settings.get('bank_forum_id'):
+                embed.add_field(
+                    name="🏦 Bank Forum",
+                    value=f"<#{settings['bank_forum_id']}>",
+                    inline=False
+                )
+            else:
+                embed.add_field(name="🏦 Bank Forum", value="Not set", inline=False)
+            
+            if settings.get('leaderboard_channel_id'):
+                embed.add_field(
+                    name="📊 Leaderboard Channel",
+                    value=f"<#{settings['leaderboard_channel_id']}>",
+                    inline=False
+                )
+            else:
+                embed.add_field(name="📊 Leaderboard Channel", value="Not set", inline=False)
+            
+            # Show admin roles
+            if settings.get('admin_role_ids'):
+                admin_role_ids = settings['admin_role_ids']
+                role_mentions = []
+                
+                for role_id in admin_role_ids:
+                    role = ctx.guild.get_role(int(role_id))
+                    if role:
+                        role_mentions.append(role.mention)
+                
+                if role_mentions:
+                    embed.add_field(
+                        name="🔒 Admin Roles",
+                        value=", ".join(role_mentions),
+                        inline=False
+                    )
+                else:
+                    embed.add_field(name="🔒 Admin Roles", value="None set", inline=False)
+            else:
+                embed.add_field(name="🔒 Admin Roles", value="None set", inline=False)
+        else:
+            embed.description = "No settings configured yet!"
+        
         # Add game settings
         company_cog = self.bot.get_cog('CompanyCommands')
         economy_cog = self.bot.get_cog('EconomyCommands')
         
         if company_cog:
-            embed.add_field(name="🏢 Max Companies", value=str(company_cog.max_companies), inline=True)
+            db_max = await db.get_max_companies(str(ctx.guild.id))
+            display_max = db_max if db_max is not None else company_cog.max_companies
+            embed.add_field(name="🏢 Max Companies", value=str(display_max), inline=True)
         if economy_cog:
             embed.add_field(name="💳 Loan Interest Rate", value=f"{economy_cog.interest_rate}%", inline=True)
         
@@ -1097,7 +1335,288 @@ class AdminCommands(commands.Cog):
         
         await ctx.send(embed=embed)
     
-    @app_commands.command(name="set-event-frequency", description="Set how often company events occur (Admin only)")
+    @app_commands.command(name="list-companies", description="View all companies currently active in this server")
+    async def list_companies_public(self, interaction: discord.Interaction):
+        """Public command — anyone can view all companies in the server"""
+        companies = await db.get_all_companies()
+
+        if not companies:
+            return await interaction.response.send_message(
+                '📋 No companies exist in this server yet!',
+                ephemeral=True
+            )
+
+        # Sort by rank tier then by income descending
+        rank_order = ['F', 'E', 'D', 'C', 'B', 'A', 'S', 'SS', 'SSR']
+
+        def rank_sort_key(c):
+            try:
+                return (rank_order.index(c['rank']), -c['current_income'])
+            except ValueError:
+                return (len(rank_order), -c['current_income'])
+
+        companies.sort(key=rank_sort_key)
+
+        # Build paginated embeds (Discord field limit = 25)
+        pages = []
+        page_size = 20
+        for i in range(0, len(companies), page_size):
+            chunk = companies[i:i + page_size]
+
+            embed = discord.Embed(
+                title="🏢 All Companies",
+                description=f"**{len(companies)} total companies** in this server",
+                color=discord.Color.blue()
+            )
+
+            # Group this chunk by rank for readability
+            current_rank = None
+            field_lines = {}
+            for c in chunk:
+                if c['rank'] not in field_lines:
+                    field_lines[c['rank']] = []
+                owner_mention = f"<@{c['owner_id']}>"
+                field_lines[c['rank']].append(
+                    f"  **#{c['id']}** {c['name']} — {owner_mention} — ${c['current_income']:,}/30s"
+                )
+
+            for rank in rank_order:
+                if rank in field_lines:
+                    rank_companies_in_chunk = [c for c in chunk if c['rank'] == rank]
+                    total_in_rank = len([c for c in companies if c['rank'] == rank])
+                    embed.add_field(
+                        name=f"⭐ Rank {rank} ({total_in_rank} total)",
+                        value="\n".join(field_lines[rank]),
+                        inline=False
+                    )
+
+            page_start = i + 1
+            page_end = min(i + page_size, len(companies))
+            total_pages = (len(companies) + page_size - 1) // page_size
+            embed.set_footer(text=f"Showing {page_start}–{page_end} of {len(companies)} • Page {(i // page_size) + 1}/{total_pages}")
+            embed.timestamp = discord.utils.utcnow()
+            pages.append(embed)
+
+        # Show first page with navigation if multiple pages
+        if len(pages) == 1:
+            await interaction.response.send_message(embed=pages[0])
+        else:
+            view = CompanyListPaginationView(pages, interaction.user.id)
+            await interaction.response.send_message(embed=pages[0], view=view)
+
+    @app_commands.command(name="reset-server", description="[ADMIN] Delete ALL companies, forgive ALL loans, and reset ALL balances to $0")
+    async def reset_server(self, interaction: discord.Interaction):
+        """[ADMIN] Full server economy reset — requires confirmation"""
+        if not await is_admin_or_authorized(interaction):
+            return await interaction.response.send_message(
+                '❌ You need to be: Bot Owner, Server Admin, or have an authorized admin role!',
+                ephemeral=True
+            )
+
+        # Gather stats to show in the confirmation prompt
+        all_companies = await db.get_all_companies()
+        all_active_loans = await db.get_all_active_loans()
+        all_players = await db.get_all_players_with_balance()
+        all_corporations = await db.get_all_corporations(str(interaction.guild.id))
+        all_wars = await db.get_all_active_wars()
+
+        total_wealth = sum(p['balance'] for p in all_players)
+        total_debt = sum(l['total_owed'] for l in all_active_loans)
+
+        embed = discord.Embed(
+            title="⚠️ SERVER ECONOMY RESET — CONFIRM",
+            description=(
+                "**This will permanently:**\n"
+                "• 🗑️ Delete every company and archive their threads\n"
+                "• 🏢 Disband every corporation and delete their forums\n"
+                "• ⚔️ End all active wars\n"
+                "• 💳 Forgive (zero out) every active loan\n"
+                "• 💰 Set every player's balance to **$0**\n\n"
+                "**This action CANNOT be undone.**"
+            ),
+            color=discord.Color.red()
+        )
+        embed.add_field(name="🏢 Companies to Delete", value=f"{len(all_companies)}", inline=True)
+        embed.add_field(name="🏛️ Corporations to Disband", value=f"{len(all_corporations)}", inline=True)
+        embed.add_field(name="⚔️ Wars to End", value=f"{len(all_wars)}", inline=True)
+        embed.add_field(name="💳 Loans to Forgive", value=f"{len(all_active_loans)}", inline=True)
+        embed.add_field(name="👤 Players to Reset", value=f"{len(all_players)}", inline=True)
+        embed.add_field(name="💰 Total Wealth Erased", value=f"${total_wealth:,}", inline=True)
+        embed.add_field(name="💸 Total Debt Forgiven", value=f"${total_debt:,}", inline=True)
+        embed.set_footer(text="Click the button below to confirm. This prompt expires in 60 seconds.")
+        embed.timestamp = discord.utils.utcnow()
+
+        view = ResetServerConfirmView(interaction.user.id, all_companies, all_corporations, interaction.guild)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+    @app_commands.command(name="force-disband-corporation", description="[ADMIN] Force disband a corporation")
+    @app_commands.describe(
+        corporation_id="ID of the corporation to disband"
+    )
+    async def force_disband_corporation(self, interaction: discord.Interaction, corporation_id: int):
+        """Forcefully disband a corporation (Admin/Owner only)"""
+        if not await is_admin_or_authorized(interaction):
+            return await interaction.response.send_message(
+                "❌ You don't have permission to use this command.",
+                ephemeral=True
+            )
+        
+        await interaction.response.defer()
+        
+        # Get the corporation details
+        corp = await db.get_corporation_by_id(corporation_id)
+        if not corp:
+            return await interaction.followup.send(
+                f"❌ Corporation with ID #{corporation_id} not found.",
+                ephemeral=True
+            )
+        
+        # Get member count
+        members = await db.get_corporation_members(corporation_id)
+        member_count = len(members)
+        
+        # Delete the forum thread if it exists
+        if corp.get('forum_post_id'):
+            try:
+                forum_thread = interaction.guild.get_thread(int(corp['forum_post_id']))
+                if not forum_thread:
+                    forum_thread = await interaction.guild.fetch_channel(int(corp['forum_post_id']))
+                if forum_thread:
+                    # Post notice before deletion
+                    notice_embed = discord.Embed(
+                        title="⚠️ CORPORATION FORCIBLY DISBANDED",
+                        description=f"**[{corp['tag']}] {corp['name']}** has been forcibly disbanded by an administrator.",
+                        color=discord.Color.dark_red()
+                    )
+                    notice_embed.timestamp = discord.utils.utcnow()
+                    await forum_thread.send(embed=notice_embed)
+                    await forum_thread.delete()
+            except Exception as e:
+                print(f"Failed to delete forum thread {corp['forum_post_id']}: {e}")
+        
+        # Delete the corporation from database
+        await db.delete_corporation(corporation_id)
+        
+        embed = discord.Embed(
+            title="✅ Corporation Forcibly Disbanded",
+            description=f"**[{corp['tag']}] {corp['name']}** has been disbanded.",
+            color=discord.Color.green()
+        )
+        embed.add_field(name="🆔 Corporation ID", value=f"#{corporation_id}", inline=True)
+        embed.add_field(name="👥 Members Removed", value=f"{member_count}", inline=True)
+        embed.add_field(name="👑 Former Leader", value=f"<@{corp['leader_id']}>", inline=True)
+        embed.set_footer(text=f"Disbanded by {interaction.user.name}")
+        embed.timestamp = discord.utils.utcnow()
+        
+        await interaction.followup.send(embed=embed)
+        
+        # Notify the leader
+        try:
+            leader_user = await self.bot.fetch_user(int(corp['leader_id']))
+            notify_embed = discord.Embed(
+                title="⚠️ Corporation Disbanded by Admin",
+                description=f"Your corporation **[{corp['tag']}] {corp['name']}** has been forcibly disbanded by an administrator.",
+                color=discord.Color.orange()
+            )
+            await leader_user.send(embed=notify_embed)
+        except:
+            pass
+
+
+    @app_commands.command(name="check-bot-permissions", description="[ADMIN] Diagnose bot permissions on configured forum channels")
+    async def check_bot_permissions(self, interaction: discord.Interaction):
+        """Reports exactly which permissions the bot has or is missing on every configured forum."""
+        if not await is_admin_or_authorized(interaction):
+            return await interaction.response.send_message(
+                '❌ You need admin permissions to use this command!',
+                ephemeral=True
+            )
+
+        settings = await db.get_guild_settings(str(interaction.guild.id))
+        bot_member = interaction.guild.me
+
+        embed = discord.Embed(
+            title="🔍 Bot Permission Diagnostic",
+            description="Checking permissions on all configured channels…",
+            color=discord.Color.blue()
+        )
+
+        # Permissions the bot needs to function in company/bank forums
+        REQUIRED_FORUM_PERMS = {
+            'create_public_threads': 'Create Forum Threads',
+            'send_messages': 'Send Messages',
+            'manage_threads': 'Manage Threads',
+            'manage_messages': 'Manage Messages',
+            'pin_messages': 'Pin Messages',
+            'read_messages': 'View Channel',
+        }
+
+        channels_to_check = []
+        if settings:
+            if settings.get('company_forum_id'):
+                channels_to_check.append(('🏢 Company Forum', settings['company_forum_id']))
+            if settings.get('bank_forum_id'):
+                channels_to_check.append(('🏦 Bank Forum', settings['bank_forum_id']))
+            if settings.get('leaderboard_channel_id'):
+                channels_to_check.append(('📊 Leaderboard Channel', settings['leaderboard_channel_id']))
+
+        if not channels_to_check:
+            embed.description = "⚠️ No channels have been configured yet.\nUse `/setup-company-forum` and `/setup-bank-forum` first."
+            return await interaction.response.send_message(embed=embed, ephemeral=True)
+
+        all_ok = True
+
+        for label, channel_id in channels_to_check:
+            try:
+                channel = interaction.guild.get_channel(int(channel_id))
+                if not channel:
+                    channel = await interaction.guild.fetch_channel(int(channel_id))
+            except Exception:
+                channel = None
+
+            if not channel:
+                embed.add_field(
+                    name=f"{label}",
+                    value=f"❌ Channel `{channel_id}` **not found** — it may have been deleted.",
+                    inline=False
+                )
+                all_ok = False
+                continue
+
+            perms = channel.permissions_for(bot_member)
+            lines = []
+            missing = []
+
+            for perm_attr, perm_name in REQUIRED_FORUM_PERMS.items():
+                has_it = getattr(perms, perm_attr, False)
+                if has_it:
+                    lines.append(f"  ✅ {perm_name}")
+                else:
+                    lines.append(f"  ❌ **{perm_name}** — MISSING")
+                    missing.append(perm_name)
+                    all_ok = False
+
+            status = "✅ All required permissions present" if not missing else f"⚠️ Missing {len(missing)} permission(s)"
+            embed.add_field(
+                name=f"{label} — {channel.mention}",
+                value=f"{status}\n" + "\n".join(lines),
+                inline=False
+            )
+
+        # Overall summary
+        if all_ok:
+            embed.color = discord.Color.green()
+            embed.description = "✅ **All configured channels have the required permissions.** The bot should be fully functional."
+        else:
+            embed.color = discord.Color.red()
+            embed.description = (
+                "❌ **Permission issues detected.** The bot is missing one or more required permissions.\n"
+                "To fix: go to the channel settings → Permissions → select the bot's role → grant the permissions marked ❌ above."
+            )
+
+        embed.set_footer(text="Permissions are resolved per-channel including role overwrites")
+        embed.timestamp = discord.utils.utcnow()
+        await interaction.response.send_message(embed=embed, ephemeral=True)
     @app_commands.describe(hours="Hours between events (1-168 hours, default is 6)")
     async def set_event_frequency(self, interaction: discord.Interaction, hours: int):
         """Set event frequency for the server"""
@@ -1241,14 +1760,34 @@ class AdminCommands(commands.Cog):
         await interaction.response.defer(ephemeral=True)
         
         try:
-            # Delete the company thread if it exists
+            # Send warning message in thread FIRST, then wait and delete
             if company['thread_id']:
                 try:
                     thread = interaction.guild.get_thread(int(company['thread_id']))
                     if not thread:
                         thread = await interaction.guild.fetch_channel(int(company['thread_id']))
+                    
                     if thread:
+                        # Send the warning embed
+                        warning_embed = discord.Embed(
+                            title="🔨 COMPANY DISBANDED BY ADMIN",
+                            description=f"**{company['name']}** has been forcibly disbanded by an administrator.\n\nThis thread will be deleted in 5 seconds.",
+                            color=discord.Color.dark_red()
+                        )
+                        warning_embed.add_field(name="🏢 Company", value=company['name'], inline=True)
+                        warning_embed.add_field(name="⭐ Rank", value=company['rank'], inline=True)
+                        warning_embed.add_field(name="💰 Income", value=f"${company['current_income']:,}/30s", inline=True)
+                        warning_embed.timestamp = discord.utils.utcnow()
+                        
+                        await thread.send(embed=warning_embed)
+                        
+                        # Wait 5 seconds
+                        import asyncio
+                        await asyncio.sleep(5)
+                        
+                        # Now delete the thread
                         await thread.delete()
+                        print(f"Deleted thread {thread.id} for company {company['name']}")
                 except Exception as e:
                     print(f"Failed to delete thread {company['thread_id']}: {e}")
             
@@ -1325,6 +1864,202 @@ class AdminCommands(commands.Cog):
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# Helper: build paginated embeds for the company list
+# ─────────────────────────────────────────────────────────────────────────
+
+def _build_company_pages(companies: list) -> list:
+    """
+    Split a sorted company list into Discord embed pages.
+    Each page groups companies by rank and fits ≤15 companies so the
+    embed stays well under the 6 000-character limit.
+    """
+    rank_order = ['F', 'E', 'D', 'C', 'B', 'A', 'S', 'SS', 'SSR']
+    pages      = []
+    chunk_size = 15          # companies per page
+    total      = len(companies)
+
+    for start in range(0, total, chunk_size):
+        chunk = companies[start:start + chunk_size]
+        page_num = (start // chunk_size) + 1
+        total_pages = (total + chunk_size - 1) // chunk_size
+
+        embed = discord.Embed(
+            title="🏢 All Companies",
+            description=f"**{total:,} companies** in this server  •  Page {page_num}/{total_pages}",
+            color=discord.Color.blue()
+        )
+
+        # Group this chunk by rank
+        for rank in rank_order:
+            rank_cos = [c for c in chunk if c['rank'] == rank]
+            if not rank_cos:
+                continue
+            lines = "\n".join(
+                f"  `#{c['id']}` **{c['name']}** — <@{c['owner_id']}> — ${c['current_income']:,}/30s"
+                for c in rank_cos
+            )
+            embed.add_field(
+                name=f"⭐ Rank {rank}  ({len(rank_cos)})",
+                value=lines,
+                inline=False
+            )
+
+        embed.set_footer(text="Use the buttons below to navigate pages")
+        embed.timestamp = discord.utils.utcnow()
+        pages.append(embed)
+
+    return pages if pages else [discord.Embed(
+        title="🏢 All Companies",
+        description="No companies exist yet.",
+        color=discord.Color.blue()
+    )]
+
+
+
+class CompanyListPaginationView(discord.ui.View):
+    """Pagination view for the public /list-companies command"""
+    def __init__(self, pages: list, user_id: int):
+        super().__init__(timeout=120)
+        self.pages = pages
+        self.current_page = 0
+        self.user_id = user_id
+
+    @discord.ui.button(label="◀ Previous", style=discord.ButtonStyle.secondary)
+    async def previous_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            return await interaction.response.send_message("❌ Not your menu!", ephemeral=True)
+        if self.current_page > 0:
+            self.current_page -= 1
+            await interaction.response.edit_message(embed=self.pages[self.current_page], view=self)
+        else:
+            await interaction.response.send_message("Already on the first page.", ephemeral=True)
+
+    @discord.ui.button(label="Next ▶", style=discord.ButtonStyle.secondary)
+    async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            return await interaction.response.send_message("❌ Not your menu!", ephemeral=True)
+        if self.current_page < len(self.pages) - 1:
+            self.current_page += 1
+            await interaction.response.edit_message(embed=self.pages[self.current_page], view=self)
+        else:
+            await interaction.response.send_message("Already on the last page.", ephemeral=True)
+
+
+class ResetServerConfirmView(discord.ui.View):
+    """Two-step confirmation for /reset-server"""
+    def __init__(self, user_id: int, companies: list, corporations: list, guild: discord.Guild):
+        super().__init__(timeout=60)
+        self.user_id = user_id
+        self.companies = companies
+        self.corporations = corporations
+        self.guild = guild
+
+    @discord.ui.button(label="⚠️ YES — RESET EVERYTHING", style=discord.ButtonStyle.danger)
+    async def confirm_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            return await interaction.response.send_message(
+                "❌ Only the admin who initiated this can confirm!", ephemeral=True
+            )
+
+        await interaction.response.defer(ephemeral=True)
+
+        # --- 1. Archive/lock company threads (preserve history, don't delete) ---
+        threads_archived = 0
+        threads_failed = 0
+        for company in self.companies:
+            if company.get('thread_id'):
+                try:
+                    thread = self.guild.get_thread(int(company['thread_id']))
+                    if not thread:
+                        thread = await self.guild.fetch_channel(int(company['thread_id']))
+                    if thread:
+                        # Post a notice before archiving
+                        notice_embed = discord.Embed(
+                            title="🔄 SERVER ECONOMY RESET",
+                            description=f"**{company['name']}** has been removed as part of a full server economy reset by an administrator.",
+                            color=discord.Color.dark_red()
+                        )
+                        notice_embed.timestamp = discord.utils.utcnow()
+                        await thread.send(embed=notice_embed)
+                        await thread.edit(archived=True, locked=True)
+                        threads_archived += 1
+                except Exception as e:
+                    print(f"Failed to archive thread {company.get('thread_id')} for company {company.get('name')}: {e}")
+                    threads_failed += 1
+
+        # --- 2. Delete corporation forum posts ---
+        corp_forums_deleted = 0
+        corp_forums_failed = 0
+        for corp in self.corporations:
+            if corp.get('forum_post_id'):
+                try:
+                    forum_thread = self.guild.get_thread(int(corp['forum_post_id']))
+                    if not forum_thread:
+                        forum_thread = await self.guild.fetch_channel(int(corp['forum_post_id']))
+                    if forum_thread:
+                        # Post a notice before deletion
+                        notice_embed = discord.Embed(
+                            title="🔄 SERVER ECONOMY RESET",
+                            description=f"**[{corp['tag']}] {corp['name']}** has been disbanded as part of a full server economy reset by an administrator.",
+                            color=discord.Color.dark_red()
+                        )
+                        notice_embed.timestamp = discord.utils.utcnow()
+                        await forum_thread.send(embed=notice_embed)
+                        await forum_thread.delete()
+                        corp_forums_deleted += 1
+                except Exception as e:
+                    print(f"Failed to delete corporation forum {corp.get('forum_post_id')} for {corp.get('name')}: {e}")
+                    corp_forums_failed += 1
+
+        # --- 3. Delete all companies from the database ---
+        await db.delete_all_companies()
+
+        # --- 4. Delete all corporations from the database ---
+        await db.delete_all_corporations(str(self.guild.id))
+
+        # --- 5. End all active wars ---
+        await db.end_all_wars()
+
+        # --- 6. Forgive all loans (mark as paid) ---
+        await db.forgive_all_loans()
+
+        # --- 7. Reset every player's balance to 0 ---
+        await db.reset_all_balances()
+
+        # --- Build result report ---
+        embed = discord.Embed(
+            title="✅ Server Economy Reset Complete",
+            description="The server economy has been fully reset.",
+            color=discord.Color.green()
+        )
+        embed.add_field(name="🏢 Companies Deleted", value=str(len(self.companies)), inline=True)
+        embed.add_field(name="🏛️ Corporations Disbanded", value=str(len(self.corporations)), inline=True)
+        embed.add_field(name="🗂️ Company Threads Archived", value=str(threads_archived), inline=True)
+        embed.add_field(name="📋 Corp Forums Deleted", value=str(corp_forums_deleted), inline=True)
+        if threads_failed:
+            embed.add_field(name="⚠️ Threads Failed", value=str(threads_failed), inline=True)
+        if corp_forums_failed:
+            embed.add_field(name="⚠️ Forums Failed", value=str(corp_forums_failed), inline=True)
+        embed.add_field(name="⚔️ All Wars", value="Ended ✅", inline=True)
+        embed.add_field(name="💳 All Loans", value="Forgiven ✅", inline=True)
+        embed.add_field(name="💰 All Balances", value="Reset to $0 ✅", inline=True)
+        embed.set_footer(text="Players can start fresh from here.")
+        embed.timestamp = discord.utils.utcnow()
+
+        await interaction.followup.send(embed=embed, ephemeral=True)
+        print(f"✅ Server reset executed by {interaction.user} in guild {self.guild.id}")
+
+    @discord.ui.button(label="❌ Cancel", style=discord.ButtonStyle.secondary)
+    async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            return await interaction.response.send_message(
+                "❌ Only the admin who initiated this can cancel!", ephemeral=True
+            )
+        await interaction.response.edit_message(content="❌ Server reset cancelled.", embed=None, view=None)
+
+
+
 class DisbandAllConfirmView(discord.ui.View):
     def __init__(self, user_id: int, companies: list, guild: discord.Guild):
         super().__init__(timeout=60)
@@ -1381,7 +2116,6 @@ class DisbandAllConfirmView(discord.ui.View):
         if interaction.user.id != self.user_id:
             return await interaction.response.send_message("❌ Only the admin who initiated this can cancel!", ephemeral=True)
         
-        await interaction.response.edit_message(content="❌ Mass disbandment cancelled.", embed=None, view=None)
         await interaction.response.edit_message(content="❌ Mass disbandment cancelled.", embed=None, view=None)
 
 # FIXED: Maintenance commands moved to AdminCommands cog (not in View class)
@@ -1493,345 +2227,6 @@ class MaintenanceCommands(commands.Cog):
         except Exception as e:
             import traceback
             await interaction.response.send_message(f'❌ Error: {str(e)}\n```\n{traceback.format_exc()[:1000]}\n```', ephemeral=True)
-    
-    @app_commands.command(name="force-disband-corporation", description="[ADMIN] Forcefully disband a corporation")
-    @app_commands.describe(corporation_id="The ID of the corporation to disband")
-    async def force_disband_corporation(self, interaction: discord.Interaction, corporation_id: int):
-        """[ADMIN] Force disband a corporation"""
-        if not await is_admin_or_authorized(interaction):
-            return await interaction.response.send_message(
-                '❌ You need to be: Bot Owner, Server Admin, or have an authorized admin role!',
-                ephemeral=True
-            )
-        
-        await interaction.response.defer(ephemeral=True)
-        
-        # Get the corporation
-        corp = await db.get_corporation_by_id(corporation_id)
-        
-        if not corp:
-            return await interaction.followup.send(
-                f"❌ Corporation with ID **{corporation_id}** not found!",
-                ephemeral=True
-            )
-        
-        # Check if in the right guild
-        if corp['guild_id'] != str(interaction.guild.id):
-            return await interaction.followup.send(
-                f"❌ Corporation #{corporation_id} is not in this server!",
-                ephemeral=True
-            )
-        
-        # Get members before deleting
-        members = await db.get_corporation_members(corporation_id)
-        member_count = len(members)
-        
-        # Refund treasury to leader if exists
-        treasury = corp.get('treasury', 0)
-        if treasury > 0:
-            # Find leader
-            leader = next((m for m in members if m['role'] == 'leader'), None)
-            if leader:
-                await db.update_player_balance(leader['player_id'], treasury)
-        
-        # Delete the corporation (this will cascade delete members)
-        await db.delete_corporation(corporation_id)
-        
-        # Announce
-        settings = await db.get_guild_settings(str(interaction.guild.id))
-        if settings and settings.get('announcements_channel_id'):
-            channel = interaction.guild.get_channel(int(settings['announcements_channel_id']))
-            
-            if channel:
-                announce_embed = discord.Embed(
-                    title="🛑 CORPORATION DISBANDED",
-                    description=(
-                        f"An admin has forcefully disbanded a corporation:\n\n"
-                        f"**{corp['name']}** [{corp['tag']}]\n\n"
-                        f"**Members:** {member_count}\n"
-                        f"**Treasury:** ${treasury:,} (refunded to leader)\n"
-                        f"**Disbanded By:** {interaction.user.mention}\n\n"
-                        f"The corporation has been permanently removed."
-                    ),
-                    color=discord.Color.red()
-                )
-                announce_embed.timestamp = datetime.utcnow()
-                
-                await channel.send(embed=announce_embed)
-        
-        # Confirm to admin
-        confirm_embed = discord.Embed(
-            title="✅ CORPORATION DISBANDED",
-            description=(
-                f"Corporation **{corp['name']}** [{corp['tag']}] has been forcefully disbanded.\n\n"
-                f"**Members:** {member_count} members removed\n"
-                f"**Treasury:** ${treasury:,} refunded to leader\n"
-                f"**Action:** Corporation permanently deleted"
-            ),
-            color=discord.Color.green()
-        )
-        
-        await interaction.followup.send(embed=confirm_embed, ephemeral=True)
-    
-    @app_commands.command(name="force-end-war", description="[ADMIN] Forcefully end an active corporation war")
-    @app_commands.describe(war_id="The ID of the war to end")
-    async def force_end_war(self, interaction: discord.Interaction, war_id: int):
-        """[ADMIN] Force end a corporation war"""
-        if not await is_admin_or_authorized(interaction):
-            return await interaction.response.send_message(
-                '❌ You need to be: Bot Owner, Server Admin, or have an authorized admin role!',
-                ephemeral=True
-            )
-        
-        await interaction.response.defer(ephemeral=True)
-        
-        # Get the war
-        war = await db.get_corporation_war_by_id(war_id)
-        
-        if not war:
-            return await interaction.followup.send(
-                f"❌ War with ID **{war_id}** not found!",
-                ephemeral=True
-            )
-        
-        # Check if war is already ended
-        if war.get('ended', False):
-            return await interaction.followup.send(
-                f"❌ War #{war_id} has already ended!",
-                ephemeral=True
-            )
-        
-        # Get corporations
-        attacker = await db.get_corporation_by_id(war['attacker_corp_id'])
-        defender = await db.get_corporation_by_id(war['defender_corp_id'])
-        
-        # End the war without a winner (admin forced)
-        await db.end_corporation_war(war_id, winner_corp_id=None, forced=True)
-        
-        # Refund prize pool to both treasuries (split evenly)
-        prize_split = war.get('prize_pool', 0) // 2
-        if prize_split > 0:
-            await db.update_corporation_treasury(war['attacker_corp_id'], prize_split)
-            await db.update_corporation_treasury(war['defender_corp_id'], prize_split)
-        
-        # Create announcement
-        settings = await db.get_guild_settings(str(interaction.guild.id))
-        if settings and settings.get('announcements_channel_id'):
-            channel = interaction.guild.get_channel(int(settings['announcements_channel_id']))
-            
-            if channel:
-                announce_embed = discord.Embed(
-                    title="🛑 WAR FORCEFULLY ENDED",
-                    description=(
-                        f"An admin has forcefully ended the war between:\n\n"
-                        f"**{attacker['name']}** [{attacker['tag']}] vs **{defender['name']}** [{defender['tag']}]\n\n"
-                        f"**Prize Pool:** ${war.get('prize_pool', 0):,} (refunded to both corporations)\n"
-                        f"**Ended By:** {interaction.user.mention}\n\n"
-                        f"The war has been terminated without a winner."
-                    ),
-                    color=discord.Color.orange()
-                )
-                announce_embed.timestamp = discord.utils.utcnow()
-                
-                await channel.send(embed=announce_embed)
-        
-        # Confirm to admin
-        confirm_embed = discord.Embed(
-            title="✅ WAR FORCEFULLY ENDED",
-            description=(
-                f"War #{war_id} has been forcefully terminated.\n\n"
-                f"**Participants:**\n"
-                f"• {attacker['name']} [{attacker['tag']}]\n"
-                f"• {defender['name']} [{defender['tag']}]\n\n"
-                f"**Prize Pool:** ${war.get('prize_pool', 0):,} (refunded)\n"
-                f"**Action:** War ended without a winner"
-            ),
-            color=discord.Color.green()
-        )
-        
-        await interaction.followup.send(embed=confirm_embed, ephemeral=True)
-    
-    @app_commands.command(name="reset-server", description="[ADMIN] DANGER: Reset ALL server data (companies, corporations, wars, etc.)")
-    async def reset_server(self, interaction: discord.Interaction):
-        """[ADMIN] Reset all server data - DANGEROUS!"""
-        if not await is_admin_or_authorized(interaction):
-            return await interaction.response.send_message(
-                '❌ You need to be: Bot Owner, Server Admin, or have an authorized admin role!',
-                ephemeral=True
-            )
-        
-        await interaction.response.defer(ephemeral=True)
-        
-        # Create super serious confirmation
-        warning_embed = discord.Embed(
-            title="⚠️ CRITICAL WARNING - SERVER RESET",
-            description=(
-                "You are about to **PERMANENTLY DELETE** all server data!\n\n"
-                "**This will remove:**\n"
-                "❌ All companies\n"
-                "❌ All corporations and members\n"
-                "❌ All active corporation wars\n"
-                "❌ All loans\n"
-                "❌ All company raids\n"
-                "❌ All mega projects\n"
-                "❌ All Hall of Fame records\n"
-                "❌ All server events\n"
-                "❌ All NPC investments\n"
-                "❌ All achievements\n\n"
-                "**This will NOT remove:**\n"
-                "✅ Player balances\n"
-                "✅ Player registration\n"
-                "✅ Server settings\n\n"
-                "**⚠️ THIS ACTION CANNOT BE UNDONE! ⚠️**\n\n"
-                "Type the server name EXACTLY to confirm:\n"
-                f"**{interaction.guild.name}**"
-            ),
-            color=discord.Color.red()
-        )
-        
-        view = ResetServerConfirmView(
-            str(interaction.user.id),
-            str(interaction.guild.id),
-            interaction.guild.name,
-            self.bot
-        )
-        
-        await interaction.followup.send(embed=warning_embed, view=view, ephemeral=True)
-
-
-class ResetServerConfirmView(discord.ui.View):
-    """Confirmation view for server reset - requires typing server name"""
-    
-    def __init__(self, user_id: str, guild_id: str, guild_name: str, bot):
-        super().__init__(timeout=120)
-        self.user_id = user_id
-        self.guild_id = guild_id
-        self.guild_name = guild_name
-        self.bot = bot
-    
-    @discord.ui.button(label="I understand - Show Reset Button", style=discord.ButtonStyle.danger, emoji="⚠️")
-    async def show_confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
-        """Show the actual reset button"""
-        if str(interaction.user.id) != self.user_id:
-            return await interaction.response.send_message(
-                "❌ This isn't your reset confirmation!",
-                ephemeral=True
-            )
-        
-        # Create modal to type server name
-        modal = ResetServerModal(self.user_id, self.guild_id, self.guild_name, self.bot)
-        await interaction.response.send_modal(modal)
-        self.stop()
-    
-    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, emoji="❌")
-    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
-        """Cancel reset"""
-        if str(interaction.user.id) != self.user_id:
-            return await interaction.response.send_message(
-                "❌ This isn't your confirmation!",
-                ephemeral=True
-            )
-        
-        await interaction.response.send_message(
-            "✅ Server reset cancelled. No data was deleted.",
-            ephemeral=True
-        )
-        self.stop()
-
-
-class ResetServerModal(discord.ui.Modal, title="Confirm Server Reset"):
-    """Modal for typing server name confirmation"""
-    
-    server_name = discord.ui.TextInput(
-        label="Type the server name to confirm",
-        placeholder="Enter server name exactly as shown...",
-        required=True,
-        max_length=100
-    )
-    
-    def __init__(self, user_id: str, guild_id: str, guild_name: str, bot):
-        super().__init__()
-        self.user_id = user_id
-        self.guild_id = guild_id
-        self.guild_name = guild_name
-        self.bot = bot
-    
-    async def on_submit(self, interaction: discord.Interaction):
-        """Process the reset"""
-        if str(interaction.user.id) != self.user_id:
-            return await interaction.response.send_message(
-                "❌ This isn't your reset confirmation!",
-                ephemeral=True
-            )
-        
-        # Check if server name matches
-        if self.server_name.value.strip() != self.guild_name:
-            return await interaction.response.send_message(
-                f"❌ Server name doesn't match! You typed: `{self.server_name.value}`\n"
-                f"Expected: `{self.guild_name}`\n\n"
-                f"Reset cancelled for safety.",
-                ephemeral=True
-            )
-        
-        await interaction.response.defer(ephemeral=True)
-        
-        try:
-            # Perform the reset
-            stats = await db.reset_server_data(self.guild_id)
-            
-            # Announce in announcements channel
-            settings = await db.get_guild_settings(self.guild_id)
-            if settings and settings.get('announcements_channel_id'):
-                channel = interaction.guild.get_channel(int(settings['announcements_channel_id']))
-                
-                if channel:
-                    announce_embed = discord.Embed(
-                        title="🔄 SERVER DATA RESET",
-                        description=(
-                            f"An admin has reset all server game data!\n\n"
-                            f"**Reset By:** {interaction.user.mention}\n\n"
-                            f"**Data Removed:**\n"
-                            f"• {stats.get('companies', 0)} companies\n"
-                            f"• {stats.get('corporations', 0)} corporations\n"
-                            f"• {stats.get('wars', 0)} active wars\n"
-                            f"• {stats.get('loans', 0)} loans\n"
-                            f"• {stats.get('raids', 0)} raids\n"
-                            f"• {stats.get('mega_projects', 0)} mega projects\n"
-                            f"• {stats.get('hall_of_fame', 0)} hall of fame records\n\n"
-                            f"**The server economy has been reset!**\n"
-                            f"Player balances and registrations remain intact."
-                        ),
-                        color=discord.Color.orange()
-                    )
-                    announce_embed.timestamp = datetime.utcnow()
-                    
-                    await channel.send(content="@everyone", embed=announce_embed)
-            
-            # Confirm to admin
-            confirm_embed = discord.Embed(
-                title="✅ SERVER RESET COMPLETE",
-                description=(
-                    f"All server game data has been reset!\n\n"
-                    f"**Data Removed:**\n"
-                    f"• {stats.get('companies', 0)} companies deleted\n"
-                    f"• {stats.get('corporations', 0)} corporations disbanded\n"
-                    f"• {stats.get('wars', 0)} wars ended\n"
-                    f"• {stats.get('loans', 0)} loans cancelled\n"
-                    f"• {stats.get('raids', 0)} raids cleared\n"
-                    f"• {stats.get('mega_projects', 0)} mega projects removed\n"
-                    f"• {stats.get('hall_of_fame', 0)} hall of fame records cleared\n\n"
-                    f"The server is ready for a fresh start!"
-                ),
-                color=discord.Color.green()
-            )
-            
-            await interaction.followup.send(embed=confirm_embed, ephemeral=True)
-            
-        except Exception as e:
-            import traceback
-            error_msg = f'❌ Error during reset: {str(e)}\n```\n{traceback.format_exc()[:1000]}\n```'
-            await interaction.followup.send(error_msg, ephemeral=True)
-
 
 async def setup(bot):
     await bot.add_cog(LeaderboardCommands(bot))
