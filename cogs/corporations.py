@@ -107,14 +107,19 @@ class Corporations(commands.Cog):
             forum_embed.set_footer(text=f"Created on {discord.utils.format_dt(discord.utils.utcnow(), 'F')}")
             
             # Create the forum post
-            forum_post = await forum_channel.create_thread(
+            forum_result = await forum_channel.create_thread(
                 name=f"[{tag.upper()}] {name}",
                 embed=forum_embed,
                 reason=f"Corporation forum created by {interaction.user.name}"
             )
             
-            # Store the forum post ID
+            # ForumChannel.create_thread returns ThreadWithMessage, get the actual thread
+            forum_post = forum_result.thread if hasattr(forum_result, 'thread') else forum_result
+            
+            # Store the forum post ID (thread ID)
             await db.set_corporation_forum_post(corp_id, str(forum_post.id))
+            
+            print(f"[DEBUG] Created corporation forum - Corp ID: {corp_id}, Thread ID: {forum_post.id}")
             
             # Send a welcome message in the forum post
             welcome_msg = await forum_post.send(
