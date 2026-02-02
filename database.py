@@ -1,119 +1,46 @@
-# Database module for Risky Monopoly Discord Bot
-# Handles all PostgreSQL database operations using asyncpg
+# Database connection and operations using asyncpg for Neon PostgreSQL
 
 import asyncpg
 import os
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict
 from datetime import datetime, timedelta
-import json
-import logging
-
-# Configure logging
-logger = logging.getLogger(__name__)
 
 # Database connection pool
 pool: Optional[asyncpg.Pool] = None
 
-
-# ===== CONNECTION MANAGEMENT =====
-
 async def init_database():
-    """Initialize database connection pool and create all tables"""
+    """Initialize database connection pool and create tables"""
     global pool
     
     database_url = os.getenv('DATABASE_URL')
     if not database_url:
         raise ValueError("DATABASE_URL environment variable not set")
     
-    try:
-        pool = await asyncpg.create_pool(
-            database_url,
-            min_size=5,
-            max_size=20,
-            statement_cache_size=0,
-            max_inactive_connection_lifetime=300
-        )
-        
-        logger.info("Database connection pool created successfully")
-        
-        # Create all tables
-        await _create_tables()
-        
-        # Run migrations
-        await _run_migrations()
-        
-        logger.info("✅ Database initialization completed - ALL FEATURES READY")
-        
-    except Exception as e:
-        logger.error(f"Database initialization failed: {e}")
-        raise
-
-
-async def _run_migrations():
-    """Run database migrations to update schema"""
-    async with pool.acquire() as conn:
-        # All migrations for backward compatibility
-        migrations = [
-            'ALTER TABLE players ADD COLUMN IF NOT EXISTS registered_at TIMESTAMP',
-            'ALTER TABLE players ADD COLUMN IF NOT EXISTS registration_role_id VARCHAR(255)',
-            'ALTER TABLE players ADD COLUMN IF NOT EXISTS loan_dm_notifications BOOLEAN DEFAULT TRUE',
-            'ALTER TABLE companies ADD COLUMN IF NOT EXISTS specialization VARCHAR(50) DEFAULT \'stable\'',
-            'ALTER TABLE companies ADD COLUMN IF NOT EXISTS last_specialization_change TIMESTAMP',
-            'ALTER TABLE companies ADD COLUMN IF NOT EXISTS logo_emoji VARCHAR(255)',
-            'ALTER TABLE company_assets ADD COLUMN IF NOT EXISTS is_black_market BOOLEAN DEFAULT FALSE',
-            'ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS announcements_channel_id VARCHAR(255)',
-            'ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS achievements_channel_id VARCHAR(255)',
-            'ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS npc_companies_channel_id VARCHAR(255)',
-            'ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS npc_companies_message_id VARCHAR(255)',
-            'ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS bankruptcy_channel_id VARCHAR(255)',
-            'ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS registration_message_id VARCHAR(255)',
-            'ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS registration_channel_id VARCHAR(255)',
-            'ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS registration_role_id VARCHAR(255)',
-            'ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS daily_quest_message_id VARCHAR(255)',
-            'ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS sabotage_catch_chance DECIMAL(5,2) DEFAULT 0.20',
-            'ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS specialization_cooldown_hours INTEGER DEFAULT 24',
-            'ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS hall_of_fame_channel_id VARCHAR(255)',
-        ]
-        
-        for migration in migrations:
-            try:
-                await conn.execute(migration)
-            except Exception as e:
-                logger.warning(f"Migration note: {e}")
-
-
-async def close_database():
-    """Close database connection pool"""
-    global pool
+    # Create pool with statement caching disabled and connection recycling
+    pool = await asyncpg.create_pool(
+        database_url, 
+        min_size=5, 
+        max_size=20,
+        statement_cache_size=0,
+        max_inactive_connection_lifetime=300
+    )
     
-    if pool:
-        await pool.close()
-        pool = None
-        logger.info("Database connection pool closed")
-
-
-async def _create_tables():
-    """Create all database tables for ALL features"""
     async with pool.acquire() as conn:
         async with conn.transaction():
+            # ==================== CORE TABLES ====================
             
-            # ===== CORE TABLES =====
-            
-            # Players table - Enhanced with registration and notifications
+            # Players table
             await conn.execute('''
                 CREATE TABLE IF NOT EXISTS players (
                     user_id VARCHAR(255) PRIMARY KEY,
                     username VARCHAR(255) NOT NULL,
                     balance BIGINT DEFAULT 0,
-                    registered_at TIMESTAMP,
-                    registration_role_id VARCHAR(255),
-                    loan_dm_notifications BOOLEAN DEFAULT TRUE,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
             
-            # Companies table - Enhanced with specialization and logo
+            # Companies table
             await conn.execute('''
                 CREATE TABLE IF NOT EXISTS companies (
                     id SERIAL PRIMARY KEY,
@@ -124,9 +51,6 @@ async def _create_tables():
                     base_income BIGINT NOT NULL,
                     current_income BIGINT NOT NULL,
                     reputation INTEGER DEFAULT 50,
-                    specialization VARCHAR(50) DEFAULT 'stable',
-                    last_specialization_change TIMESTAMP,
-                    logo_emoji VARCHAR(255),
                     thread_id VARCHAR(255) UNIQUE,
                     embed_message_id VARCHAR(255),
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -134,7 +58,9 @@ async def _create_tables():
                 )
             ''')
             
-            # Company assets/upgrades table - Enhanced with black market flag
+            await conn.execute('CREATE INDEX IF NOT EXISTS idx_companies_owner ON companies(owner_id)')
+            
+            # Company assets/upgrades table
             await conn.execute('''
                 CREATE TABLE IF NOT EXISTS company_assets (
                     id SERIAL PRIMARY KEY,
@@ -143,7 +69,6 @@ async def _create_tables():
                     asset_type VARCHAR(100) NOT NULL,
                     income_boost BIGINT NOT NULL,
                     cost BIGINT NOT NULL,
-                    is_black_market BOOLEAN DEFAULT FALSE,
                     purchased_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
@@ -166,6 +91,9 @@ async def _create_tables():
                 )
             ''')
             
+            await conn.execute('CREATE INDEX IF NOT EXISTS idx_loans_borrower ON loans(borrower_id)')
+            await conn.execute('CREATE INDEX IF NOT EXISTS idx_loans_paid ON loans(is_paid)')
+            
             # Events log table
             await conn.execute('''
                 CREATE TABLE IF NOT EXISTS company_events (
@@ -178,7 +106,7 @@ async def _create_tables():
                 )
             ''')
             
-            # ===== GUILD SETTINGS - COMPREHENSIVE =====
+            # Guild settings table
             await conn.execute('''
                 CREATE TABLE IF NOT EXISTS guild_settings (
                     guild_id VARCHAR(255) PRIMARY KEY,
@@ -186,320 +114,314 @@ async def _create_tables():
                     bank_forum_id VARCHAR(255),
                     leaderboard_channel_id VARCHAR(255),
                     leaderboard_message_id VARCHAR(255),
-                    announcements_channel_id VARCHAR(255),
-                    achievements_channel_id VARCHAR(255),
-                    npc_companies_channel_id VARCHAR(255),
-                    npc_companies_message_id VARCHAR(255),
-                    bankruptcy_channel_id VARCHAR(255),
-                    registration_message_id VARCHAR(255),
-                    registration_channel_id VARCHAR(255),
-                    registration_role_id VARCHAR(255),
-                    daily_quest_message_id VARCHAR(255),
-                    hall_of_fame_channel_id VARCHAR(255),
                     event_frequency_hours INTEGER DEFAULT 6,
-                    sabotage_catch_chance DECIMAL(5,2) DEFAULT 0.20,
-                    specialization_cooldown_hours INTEGER DEFAULT 24,
                     admin_role_ids TEXT[],
                     create_company_post_id VARCHAR(255),
                     request_loan_post_id VARCHAR(255),
+                    tax_rate DECIMAL(5,2) DEFAULT 0.0,
+                    tax_notification_channel_id VARCHAR(255),
+                    stock_market_channel_id VARCHAR(255),
+                    stock_market_message_id VARCHAR(255),
+                    stock_update_interval_minutes INTEGER DEFAULT 3,
+                    stock_market_frozen BOOLEAN DEFAULT FALSE,
+                    collectibles_catalog_channel_id VARCHAR(255),
+                    collectibles_catalog_message_id VARCHAR(255),
+                    corporation_member_limit INTEGER DEFAULT 5,
+                    corporation_leaderboard_channel_id VARCHAR(255),
+                    corporation_leaderboard_message_id VARCHAR(255),
+                    registration_channel_id VARCHAR(255),
+                    registration_message_id VARCHAR(255),
+                    registration_role_id VARCHAR(255),
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
             
-            # ===== NEW FEATURE TABLES =====
+            # ==================== TAX SYSTEM ====================
             
-            # Company Mergers
             await conn.execute('''
-                CREATE TABLE IF NOT EXISTS company_mergers (
-                    id SERIAL PRIMARY KEY,
-                    player_id VARCHAR(255) NOT NULL REFERENCES players(user_id) ON DELETE CASCADE,
-                    company1_id INTEGER NOT NULL,
-                    company2_id INTEGER NOT NULL,
-                    resulting_rank VARCHAR(10) NOT NULL,
-                    resulting_company_id INTEGER REFERENCES companies(id) ON DELETE SET NULL,
-                    merged_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            ''')
-            
-            # Server/Seasonal Events
-            await conn.execute('''
-                CREATE TABLE IF NOT EXISTS server_events (
-                    id SERIAL PRIMARY KEY,
-                    guild_id VARCHAR(255) NOT NULL,
-                    event_name VARCHAR(255) NOT NULL,
-                    event_type VARCHAR(50) NOT NULL,
-                    event_description TEXT NOT NULL,
-                    effect_data JSONB,
-                    started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    ends_at TIMESTAMP,
-                    is_active BOOLEAN DEFAULT TRUE
-                )
-            ''')
-            
-            # Achievements
-            await conn.execute('''
-                CREATE TABLE IF NOT EXISTS achievements (
+                CREATE TABLE IF NOT EXISTS tax_collections (
                     id SERIAL PRIMARY KEY,
                     user_id VARCHAR(255) NOT NULL REFERENCES players(user_id) ON DELETE CASCADE,
-                    achievement_type VARCHAR(100) NOT NULL,
-                    achievement_name VARCHAR(255) NOT NULL,
-                    achieved_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE(user_id, achievement_type)
-                )
-            ''')
-            
-            # Daily Quests
-            await conn.execute('''
-                CREATE TABLE IF NOT EXISTS daily_quests (
-                    id SERIAL PRIMARY KEY,
+                    amount BIGINT NOT NULL,
                     guild_id VARCHAR(255) NOT NULL,
-                    quest_date DATE NOT NULL,
-                    quest_data JSONB NOT NULL,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE(guild_id, quest_date)
+                    collected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
             
-            # Daily Quest Progress
+            await conn.execute('CREATE INDEX IF NOT EXISTS idx_tax_collections_guild ON tax_collections(guild_id)')
+            await conn.execute('CREATE INDEX IF NOT EXISTS idx_tax_collections_time ON tax_collections(collected_at)')
+            
+            # ==================== COLLECTIBLES ====================
+            
             await conn.execute('''
-                CREATE TABLE IF NOT EXISTS daily_quest_progress (
+                CREATE TABLE IF NOT EXISTS player_collectibles (
                     id SERIAL PRIMARY KEY,
                     user_id VARCHAR(255) NOT NULL REFERENCES players(user_id) ON DELETE CASCADE,
-                    guild_id VARCHAR(255) NOT NULL,
-                    quest_id INTEGER NOT NULL REFERENCES daily_quests(id) ON DELETE CASCADE,
-                    quest_type VARCHAR(100) NOT NULL,
-                    progress INTEGER DEFAULT 0,
-                    target INTEGER NOT NULL,
-                    completed BOOLEAN DEFAULT FALSE,
-                    completed_at TIMESTAMP,
-                    UNIQUE(user_id, quest_id, quest_type)
+                    collectible_id VARCHAR(255) NOT NULL,
+                    acquired_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(user_id, collectible_id)
                 )
             ''')
             
-            # Black Market Purchases
+            await conn.execute('CREATE INDEX IF NOT EXISTS idx_player_collectibles_user ON player_collectibles(user_id)')
+            
+            # ==================== STOCK MARKET ====================
+            
             await conn.execute('''
-                CREATE TABLE IF NOT EXISTS black_market_purchases (
+                CREATE TABLE IF NOT EXISTS stock_prices (
+                    symbol VARCHAR(10) PRIMARY KEY,
+                    price BIGINT NOT NULL,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS stock_price_history (
+                    id SERIAL PRIMARY KEY,
+                    symbol VARCHAR(10) NOT NULL,
+                    old_price BIGINT NOT NULL,
+                    new_price BIGINT NOT NULL,
+                    change_percent DECIMAL(10,2) NOT NULL,
+                    changed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            
+            await conn.execute('CREATE INDEX IF NOT EXISTS idx_stock_history_symbol ON stock_price_history(symbol)')
+            await conn.execute('CREATE INDEX IF NOT EXISTS idx_stock_history_time ON stock_price_history(changed_at)')
+            
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS player_stocks (
                     id SERIAL PRIMARY KEY,
                     user_id VARCHAR(255) NOT NULL REFERENCES players(user_id) ON DELETE CASCADE,
-                    company_id INTEGER REFERENCES companies(id) ON DELETE CASCADE,
-                    purchase_type VARCHAR(100) NOT NULL,
-                    item_type VARCHAR(100) NOT NULL,
-                    cost BIGINT NOT NULL,
-                    purchased_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    symbol VARCHAR(10) NOT NULL,
+                    shares INTEGER NOT NULL,
+                    average_price BIGINT NOT NULL,
+                    purchased_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(user_id, symbol)
                 )
             ''')
             
-            # Black Market Effects
+            await conn.execute('CREATE INDEX IF NOT EXISTS idx_player_stocks_user ON player_stocks(user_id)')
+            
+            # Frozen stocks tracking (for stocks that crashed to $0)
             await conn.execute('''
-                CREATE TABLE IF NOT EXISTS black_market_effects (
-                    id SERIAL PRIMARY KEY,
-                    company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
-                    effect_type VARCHAR(100) NOT NULL,
-                    effect_value DECIMAL(10,2) NOT NULL,
-                    expires_at TIMESTAMP,
-                    UNIQUE(company_id, effect_type)
+                CREATE TABLE IF NOT EXISTS frozen_stocks (
+                    symbol VARCHAR(10) PRIMARY KEY,
+                    frozen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    unfreezes_at TIMESTAMP NOT NULL
                 )
             ''')
             
-            # Sabotage Actions
-            await conn.execute('''
-                CREATE TABLE IF NOT EXISTS sabotage_operations (
-                    id SERIAL PRIMARY KEY,
-                    saboteur_company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
-                    target_company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
-                    action_type VARCHAR(100) NOT NULL,
-                    spy_count INTEGER DEFAULT 0,
-                    planning_cost BIGINT DEFAULT 0,
-                    preparation_time_hours INTEGER DEFAULT 0,
-                    is_prepared BOOLEAN DEFAULT FALSE,
-                    executed BOOLEAN DEFAULT FALSE,
-                    was_successful BOOLEAN,
-                    was_caught BOOLEAN,
-                    damage_dealt BIGINT DEFAULT 0,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    ready_at TIMESTAMP,
-                    executed_at TIMESTAMP,
-                    sabotage_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            await conn.execute('CREATE INDEX IF NOT EXISTS idx_frozen_stocks_unfreezes ON frozen_stocks(unfreezes_at)')
+            
+            # ==================== COMPANY WARS/RAIDS ====================
+            
+            # Check and fix company_raids table schema
+            table_exists = await conn.fetchval('''
+                SELECT EXISTS (
+                    SELECT FROM information_schema.tables 
+                    WHERE table_name = 'company_raids'
                 )
             ''')
             
-            # Espionage Missions
-            await conn.execute('''
-                CREATE TABLE IF NOT EXISTS espionage_missions (
-                    id SERIAL PRIMARY KEY,
-                    spy_company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
-                    target_company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
-                    mission_type VARCHAR(50) NOT NULL,
-                    was_successful BOOLEAN NOT NULL,
-                    mission_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            ''')
+            if table_exists:
+                column_exists = await conn.fetchval('''
+                    SELECT EXISTS (
+                        SELECT FROM information_schema.columns 
+                        WHERE table_name = 'company_raids' 
+                        AND column_name = 'attacker_id'
+                    )
+                ''')
+                
+                if not column_exists:
+                    print("Recreating company_raids table due to schema mismatch...")
+                    await conn.execute('DROP TABLE IF EXISTS company_raids CASCADE')
             
-            # Company Raids
             await conn.execute('''
                 CREATE TABLE IF NOT EXISTS company_raids (
                     id SERIAL PRIMARY KEY,
-                    attacker_company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
-                    target_company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
-                    was_successful BOOLEAN NOT NULL,
-                    income_stolen BIGINT DEFAULT 0,
-                    raid_cost BIGINT NOT NULL,
-                    battle_duration_hours INTEGER DEFAULT 24,
-                    raid_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    ends_at TIMESTAMP
+                    attacker_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+                    defender_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+                    success BOOLEAN NOT NULL,
+                    loot BIGINT DEFAULT 0,
+                    reputation_loss INTEGER DEFAULT 0,
+                    raided_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
             
-            # Mega Projects
+            await conn.execute('CREATE INDEX IF NOT EXISTS idx_raids_attacker ON company_raids(attacker_id)')
+            await conn.execute('CREATE INDEX IF NOT EXISTS idx_raids_defender ON company_raids(defender_id)')
+            await conn.execute('CREATE INDEX IF NOT EXISTS idx_raids_time ON company_raids(raided_at)')
+            
+            # Check and fix company_wars table schema
+            table_exists = await conn.fetchval('''
+                SELECT EXISTS (
+                    SELECT FROM information_schema.tables 
+                    WHERE table_name = 'company_wars'
+                )
+            ''')
+            
+            if table_exists:
+                column_exists = await conn.fetchval('''
+                    SELECT EXISTS (
+                        SELECT FROM information_schema.columns 
+                        WHERE table_name = 'company_wars' 
+                        AND column_name = 'attacker_id'
+                    )
+                ''')
+                
+                if not column_exists:
+                    print("Recreating company_wars table due to schema mismatch...")
+                    await conn.execute('DROP TABLE IF EXISTS company_wars CASCADE')
+            
             await conn.execute('''
-                CREATE TABLE IF NOT EXISTS mega_projects (
+                CREATE TABLE IF NOT EXISTS company_wars (
                     id SERIAL PRIMARY KEY,
-                    guild_id VARCHAR(255) NOT NULL,
-                    project_key VARCHAR(100) NOT NULL,
-                    project_name VARCHAR(255) NOT NULL,
-                    project_rank VARCHAR(10) NOT NULL,
-                    project_description TEXT NOT NULL,
-                    cost BIGINT NOT NULL,
-                    owner_id VARCHAR(255) REFERENCES players(user_id) ON DELETE SET NULL,
-                    funder_id VARCHAR(255) REFERENCES players(user_id) ON DELETE SET NULL,
-                    effect_data JSONB,
-                    is_active BOOLEAN DEFAULT TRUE,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    completed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE(guild_id, project_key),
-                    UNIQUE(guild_id, project_name)
+                    attacker_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+                    defender_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+                    attacker_damage BIGINT DEFAULT 0,
+                    defender_damage BIGINT DEFAULT 0,
+                    starts_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    ends_at TIMESTAMP NOT NULL,
+                    active BOOLEAN DEFAULT TRUE,
+                    winner_id INTEGER
                 )
             ''')
             
-            # Corporations
+            await conn.execute('CREATE INDEX IF NOT EXISTS idx_wars_attacker ON company_wars(attacker_id)')
+            await conn.execute('CREATE INDEX IF NOT EXISTS idx_wars_defender ON company_wars(defender_id)')
+            await conn.execute('CREATE INDEX IF NOT EXISTS idx_wars_active ON company_wars(active)')
+            
+            # ==================== CORPORATIONS ====================
+            
             await conn.execute('''
                 CREATE TABLE IF NOT EXISTS corporations (
                     id SERIAL PRIMARY KEY,
-                    guild_id VARCHAR(255) NOT NULL,
                     name VARCHAR(255) NOT NULL,
-                    tag VARCHAR(10) NOT NULL,
+                    tag VARCHAR(5) NOT NULL,
                     leader_id VARCHAR(255) NOT NULL REFERENCES players(user_id) ON DELETE CASCADE,
-                    treasury BIGINT DEFAULT 0,
-                    level INTEGER DEFAULT 1,
-                    wars_won INTEGER DEFAULT 0,
+                    guild_id VARCHAR(255) NOT NULL,
+                    forum_post_id VARCHAR(255),
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE(guild_id, name),
-                    UNIQUE(guild_id, tag)
+                    UNIQUE(name),
+                    UNIQUE(tag)
                 )
             ''')
             
-            # Corporation Members
+            await conn.execute('CREATE INDEX IF NOT EXISTS idx_corporations_leader ON corporations(leader_id)')
+            await conn.execute('CREATE INDEX IF NOT EXISTS idx_corporations_guild ON corporations(guild_id)')
+            
             await conn.execute('''
                 CREATE TABLE IF NOT EXISTS corporation_members (
                     id SERIAL PRIMARY KEY,
                     corporation_id INTEGER NOT NULL REFERENCES corporations(id) ON DELETE CASCADE,
                     user_id VARCHAR(255) NOT NULL REFERENCES players(user_id) ON DELETE CASCADE,
-                    role VARCHAR(20) NOT NULL DEFAULT 'member',
                     joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(user_id)
+                )
+            ''')
+            
+            await conn.execute('CREATE INDEX IF NOT EXISTS idx_corp_members_corp ON corporation_members(corporation_id)')
+            await conn.execute('CREATE INDEX IF NOT EXISTS idx_corp_members_user ON corporation_members(user_id)')
+            
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS corporation_invites (
+                    id SERIAL PRIMARY KEY,
+                    corporation_id INTEGER NOT NULL REFERENCES corporations(id) ON DELETE CASCADE,
+                    user_id VARCHAR(255) NOT NULL REFERENCES players(user_id) ON DELETE CASCADE,
+                    accepted BOOLEAN DEFAULT FALSE,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE(corporation_id, user_id)
                 )
             ''')
             
-            # Corporation Wars
+            await conn.execute('CREATE INDEX IF NOT EXISTS idx_corp_invites_user ON corporation_invites(user_id)')
+            
+            # Corporation mega projects
             await conn.execute('''
-                CREATE TABLE IF NOT EXISTS corporation_wars (
+                CREATE TABLE IF NOT EXISTS mega_projects (
                     id SERIAL PRIMARY KEY,
-                    attacker_corp_id INTEGER NOT NULL REFERENCES corporations(id) ON DELETE CASCADE,
-                    defender_corp_id INTEGER NOT NULL REFERENCES corporations(id) ON DELETE CASCADE,
-                    prize_pool BIGINT NOT NULL,
-                    attacker_score INTEGER DEFAULT 0,
-                    defender_score INTEGER DEFAULT 0,
-                    winner_corp_id INTEGER REFERENCES corporations(id) ON DELETE SET NULL,
+                    name VARCHAR(255) NOT NULL UNIQUE,
+                    description TEXT NOT NULL,
+                    total_cost BIGINT NOT NULL,
+                    buff_type VARCHAR(100) NOT NULL,
+                    buff_value DECIMAL(10,2) NOT NULL
+                )
+            ''')
+            
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS corporation_mega_projects (
+                    id SERIAL PRIMARY KEY,
+                    corporation_id INTEGER NOT NULL REFERENCES corporations(id) ON DELETE CASCADE,
+                    mega_project_id INTEGER NOT NULL REFERENCES mega_projects(id) ON DELETE CASCADE,
+                    current_funding BIGINT DEFAULT 0,
+                    completed BOOLEAN DEFAULT FALSE,
                     started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    ends_at TIMESTAMP NOT NULL,
-                    is_active BOOLEAN DEFAULT TRUE
+                    completed_at TIMESTAMP,
+                    UNIQUE(corporation_id)
                 )
             ''')
             
-            # NPC Companies
-            await conn.execute('''
-                CREATE TABLE IF NOT EXISTS npc_companies (
-                    id SERIAL PRIMARY KEY,
-                    guild_id VARCHAR(255) NOT NULL,
-                    company_key VARCHAR(100) NOT NULL,
-                    name VARCHAR(255) NOT NULL,
-                    rank VARCHAR(10) NOT NULL,
-                    sector VARCHAR(100) NOT NULL,
-                    base_value BIGINT NOT NULL,
-                    base_income BIGINT NOT NULL,
-                    current_value BIGINT NOT NULL,
-                    current_income BIGINT NOT NULL,
-                    share_price BIGINT NOT NULL,
-                    total_shares INTEGER DEFAULT 1000,
-                    available_shares INTEGER DEFAULT 1000,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    last_event_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE(guild_id, company_key)
-                )
-            ''')
+            await conn.execute('CREATE INDEX IF NOT EXISTS idx_corp_mega_projects_corp ON corporation_mega_projects(corporation_id)')
+            await conn.execute('CREATE INDEX IF NOT EXISTS idx_corp_mega_projects_project ON corporation_mega_projects(mega_project_id)')
             
-            # NPC Investments
             await conn.execute('''
-                CREATE TABLE IF NOT EXISTS npc_investments (
+                CREATE TABLE IF NOT EXISTS mega_project_contributions (
                     id SERIAL PRIMARY KEY,
+                    corp_mega_project_id INTEGER NOT NULL REFERENCES corporation_mega_projects(id) ON DELETE CASCADE,
                     user_id VARCHAR(255) NOT NULL REFERENCES players(user_id) ON DELETE CASCADE,
-                    npc_company_id INTEGER NOT NULL REFERENCES npc_companies(id) ON DELETE CASCADE,
-                    shares INTEGER NOT NULL,
-                    shares_owned INTEGER NOT NULL,
-                    purchase_price BIGINT NOT NULL,
-                    invested_amount BIGINT NOT NULL,
-                    purchased_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    invested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE(user_id, npc_company_id)
-                )
-            ''')
-            
-            # NPC Dividend Payments
-            await conn.execute('''
-                CREATE TABLE IF NOT EXISTS npc_dividend_payments (
-                    id SERIAL PRIMARY KEY,
-                    investment_id INTEGER NOT NULL REFERENCES npc_investments(id) ON DELETE CASCADE,
                     amount BIGINT NOT NULL,
-                    paid_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    contributed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
             
-            # Hall of Fame
-            await conn.execute('''
-                CREATE TABLE IF NOT EXISTS hall_of_fame (
-                    id SERIAL PRIMARY KEY,
-                    guild_id VARCHAR(255) NOT NULL,
-                    category VARCHAR(100) NOT NULL,
-                    user_id VARCHAR(255) NOT NULL REFERENCES players(user_id) ON DELETE CASCADE,
-                    record_value BIGINT NOT NULL,
-                    additional_info TEXT,
-                    achieved_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE(guild_id, category)
-                )
-            ''')
+            await conn.execute('CREATE INDEX IF NOT EXISTS idx_mega_contributions_project ON mega_project_contributions(corp_mega_project_id)')
+            await conn.execute('CREATE INDEX IF NOT EXISTS idx_mega_contributions_user ON mega_project_contributions(user_id)')
             
-            # Hall of Fame Announcements
-            await conn.execute('''
-                CREATE TABLE IF NOT EXISTS hall_of_fame_announcements (
-                    id SERIAL PRIMARY KEY,
-                    guild_id VARCHAR(255) NOT NULL,
-                    user_id VARCHAR(255) NOT NULL,
-                    category VARCHAR(100) NOT NULL,
-                    announced_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            ''')
+            # ==================== MIGRATIONS ====================
+            # ALTER TABLE migrations for columns added after initial table creation.
+            # CREATE TABLE IF NOT EXISTS skips entirely when the table already exists,
+            # so columns added in later deploys never get created on live databases.
+            # ADD COLUMN IF NOT EXISTS is idempotent — safe to run every startup.
             
-            logger.info("✅ All database tables created successfully")
+            migrations = [
+                "ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS collectibles_catalog_channel_id VARCHAR(255)",
+                "ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS collectibles_catalog_message_id VARCHAR(255)",
+                "ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS stock_market_channel_id VARCHAR(255)",
+                "ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS stock_market_message_id VARCHAR(255)",
+                "ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS stock_update_interval_minutes INTEGER DEFAULT 3",
+                "ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS stock_market_frozen BOOLEAN DEFAULT FALSE",
+                "ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS corporation_member_limit INTEGER DEFAULT 5",
+                "ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS corporation_leaderboard_channel_id VARCHAR(255)",
+                "ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS corporation_leaderboard_message_id VARCHAR(255)",
+                "ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS registration_channel_id VARCHAR(255)",
+                "ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS registration_message_id VARCHAR(255)",
+                "ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS registration_role_id VARCHAR(255)",
+                "ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS max_companies INTEGER DEFAULT 3",
+                "ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS company_leaderboard_channel_id VARCHAR(255)",
+                "ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS company_leaderboard_message_id VARCHAR(255)",
+                "ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS corporation_forum_channel_id VARCHAR(255)",
+                "ALTER TABLE corporations ADD COLUMN IF NOT EXISTS forum_post_id VARCHAR(255)",
+            ]
+            for migration in migrations:
+                await conn.execute(migration)
+    
+    print('✅ Database initialized successfully with all features')
+
+async def close_database():
+    """Close database connection pool"""
+    global pool
+    if pool:
+        await pool.close()
 
 
-# ===== PLAYER FUNCTIONS =====
+# ==================== PLAYER OPERATIONS ====================
 
 async def get_player(user_id: str) -> Optional[Dict]:
     """Get a player by user ID"""
     async with pool.acquire() as conn:
         row = await conn.fetchrow('SELECT * FROM players WHERE user_id = $1', user_id)
         return dict(row) if row else None
-
 
 async def upsert_player(user_id: str, username: str) -> Dict:
     """Create or update a player"""
@@ -513,278 +435,168 @@ async def upsert_player(user_id: str, username: str) -> Dict:
         ''', user_id, username)
         return dict(row)
 
-
-async def register_player(user_id: str, username: str, role_id: str) -> Dict:
-    """Register a player with a role"""
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow('''
-            INSERT INTO players (user_id, username, balance, registered_at, registration_role_id)
-            VALUES ($1, $2, 0, CURRENT_TIMESTAMP, $3)
-            ON CONFLICT (user_id)
-            DO UPDATE SET 
-                username = $2, 
-                registered_at = COALESCE(players.registered_at, CURRENT_TIMESTAMP),
-                registration_role_id = $3,
-                updated_at = CURRENT_TIMESTAMP
-            RETURNING *
-        ''', user_id, username, role_id)
-        return dict(row)
-
-
 async def update_player_balance(user_id: str, amount: int) -> Dict:
-    """Update a player's balance"""
+    """Update player balance (positive or negative amount)"""
     async with pool.acquire() as conn:
         row = await conn.fetchrow('''
             UPDATE players
-            SET balance = balance + $2, updated_at = CURRENT_TIMESTAMP
+            SET balance = GREATEST(0, balance + $2), updated_at = CURRENT_TIMESTAMP
             WHERE user_id = $1
             RETURNING *
         ''', user_id, amount)
         return dict(row) if row else None
 
-
-async def set_loan_notifications(user_id: str, enabled: bool):
-    """Set whether user receives loan DM notifications"""
+async def get_all_players_with_balance() -> List[Dict]:
+    """Get all players with positive balance"""
     async with pool.acquire() as conn:
-        await conn.execute('''
-            UPDATE players
-            SET loan_dm_notifications = $2
-            WHERE user_id = $1
-        ''', user_id, enabled)
+        rows = await conn.fetch('SELECT * FROM players WHERE balance > 0')
+        return [dict(row) for row in rows]
 
-
-async def get_player_stats(user_id: str) -> Dict:
-    """Get comprehensive player statistics"""
+async def get_top_players(limit: int = 25, offset: int = 0) -> List[Dict]:
+    """Get top players by balance"""
     async with pool.acquire() as conn:
-        player = await conn.fetchrow('SELECT * FROM players WHERE user_id = $1', user_id)
-        
-        if not player:
-            return {}
-        
-        loans_taken = await conn.fetchval(
-            'SELECT COUNT(*) FROM loans WHERE borrower_id = $1', user_id
-        ) or 0
-        
-        loans_repaid = await conn.fetchval(
-            'SELECT COUNT(*) FROM loans WHERE borrower_id = $1 AND is_paid = TRUE', user_id
-        ) or 0
-        
-        companies = await conn.fetch(
-            'SELECT * FROM companies WHERE owner_id = $1', user_id
-        )
-        
-        active_companies = len(companies)
-        ranks = set([c['rank'] for c in companies])
-        max_income = max([c['current_income'] for c in companies]) if companies else 0
-        max_reputation = max([c['reputation'] for c in companies]) if companies else 0
-        
-        mergers = await conn.fetchval(
-            'SELECT COUNT(*) FROM company_mergers WHERE player_id = $1', user_id
-        ) or 0
-        
-        black_market = await conn.fetchval(
-            'SELECT COUNT(*) FROM black_market_purchases WHERE user_id = $1', user_id
-        ) or 0
-        
-        quests = await conn.fetchval(
-            'SELECT COUNT(*) FROM daily_quest_progress WHERE user_id = $1 AND completed = TRUE', user_id
-        ) or 0
-        
-        achievements = await conn.fetchval(
-            'SELECT COUNT(*) FROM achievements WHERE user_id = $1', user_id
-        ) or 0
-        
-        return {
-            'balance': player['balance'],
-            'loans_taken': loans_taken,
-            'loans_repaid': loans_repaid,
-            'active_companies': active_companies,
-            'ranks_achieved': list(ranks),
-            'mergers_completed': mergers,
-            'black_market_uses': black_market,
-            'quests_completed': quests,
-            'max_reputation': max_reputation,
-            'max_company_income': max_income,
-            'achievements_count': achievements
-        }
+        rows = await conn.fetch('''
+            SELECT user_id, username, balance,
+                   ROW_NUMBER() OVER (ORDER BY balance DESC) as rank
+            FROM players
+            WHERE balance > 0
+            ORDER BY balance DESC
+            LIMIT $1 OFFSET $2
+        ''', limit, offset)
+        return [dict(row) for row in rows]
+
+async def get_total_player_count() -> int:
+    """Get total number of players with balance"""
+    async with pool.acquire() as conn:
+        count = await conn.fetchval('SELECT COUNT(*) FROM players WHERE balance > 0')
+        return count or 0
 
 
-# ===== COMPANY FUNCTIONS =====
+# ==================== COMPANY OPERATIONS ====================
 
-async def create_company(owner_id: str, name: str, rank: str, company_type: str, base_income: int) -> Dict:
+async def create_company(owner_id: str, name: str, rank: str, company_type: str, base_income: int, thread_id: str) -> Dict:
     """Create a new company"""
     async with pool.acquire() as conn:
         row = await conn.fetchrow('''
-            INSERT INTO companies (owner_id, name, rank, type, base_income, current_income, reputation, specialization)
-            VALUES ($1, $2, $3, $4, $5, $5, 50, 'stable')
+            INSERT INTO companies (owner_id, name, rank, type, base_income, current_income, thread_id)
+            VALUES ($1, $2, $3, $4, $5, $5, $6)
             RETURNING *
-        ''', owner_id, name, rank, company_type, base_income)
+        ''', owner_id, name, rank, company_type, base_income, thread_id)
         return dict(row)
 
-
 async def get_company_by_id(company_id: int) -> Optional[Dict]:
-    """Get a company by ID"""
+    """Get company by ID"""
     async with pool.acquire() as conn:
         row = await conn.fetchrow('SELECT * FROM companies WHERE id = $1', company_id)
         return dict(row) if row else None
 
-
-async def get_companies_by_owner(owner_id: str) -> List[Dict]:
-    """Get all companies owned by a user"""
+async def get_company_by_owner(owner_id: str) -> Optional[Dict]:
+    """Get company owned by user (returns first one only)"""
     async with pool.acquire() as conn:
-        rows = await conn.fetch('''
-            SELECT * FROM companies
-            WHERE owner_id = $1
-            ORDER BY created_at DESC
-        ''', owner_id)
+        row = await conn.fetchrow('SELECT * FROM companies WHERE owner_id = $1', owner_id)
+        return dict(row) if row else None
+
+async def get_player_companies(owner_id: str) -> List[Dict]:
+    """Get all companies owned by a player"""
+    async with pool.acquire() as conn:
+        rows = await conn.fetch('SELECT * FROM companies WHERE owner_id = $1 ORDER BY current_income DESC', owner_id)
         return [dict(row) for row in rows]
 
-
 async def get_company_by_thread(thread_id: str) -> Optional[Dict]:
-    """Get a company by its thread ID"""
+    """Get company by thread ID"""
     async with pool.acquire() as conn:
         row = await conn.fetchrow('SELECT * FROM companies WHERE thread_id = $1', thread_id)
         return dict(row) if row else None
 
+async def get_all_companies() -> List[Dict]:
+    """Get all companies"""
+    async with pool.acquire() as conn:
+        rows = await conn.fetch('SELECT * FROM companies ORDER BY current_income DESC')
+        return [dict(row) for row in rows]
 
-async def set_company_thread(company_id: int, thread_id: str, embed_message_id: str) -> Dict:
-    """Set company thread and embed message"""
+async def update_company_income(company_id: int, change: int) -> Dict:
+    """Update company income (can be positive or negative)"""
     async with pool.acquire() as conn:
         row = await conn.fetchrow('''
             UPDATE companies
-            SET thread_id = $2, embed_message_id = $3
+            SET current_income = GREATEST(1, current_income + $2),
+                last_event_at = CURRENT_TIMESTAMP
             WHERE id = $1
             RETURNING *
-        ''', company_id, thread_id, embed_message_id)
-        return dict(row)
-
-
-async def update_company_income(company_id: int, income_change: int) -> Dict:
-    """Update company income"""
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow('''
-            UPDATE companies
-            SET current_income = current_income + $2, last_event_at = CURRENT_TIMESTAMP
-            WHERE id = $1
-            RETURNING *
-        ''', company_id, income_change)
-        
-        if row:
-            try:
-                import auto_updates
-                await auto_updates.trigger_updates_for_company_change(company_id)
-            except:
-                pass
-        
+        ''', company_id, change)
         return dict(row) if row else None
 
-
-async def set_company_income(company_id: int, new_income: int):
-    """Set company income to a specific value"""
+async def update_company_reputation(company_id: int, change: int):
+    """Update company reputation"""
     async with pool.acquire() as conn:
         await conn.execute('''
             UPDATE companies
-            SET current_income = $1
-            WHERE id = $2
-        ''', new_income, company_id)
-
-
-async def modify_company_income(company_id: int, income_change: int, duration_hours: int = None):
-    """Modify company income (temporarily if duration specified)"""
-    await update_company_income(company_id, income_change)
-
-
-async def update_company_specialization(company_id: int, specialization: str) -> Dict:
-    """Update company specialization"""
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow('''
-            UPDATE companies
-            SET specialization = $2, last_specialization_change = CURRENT_TIMESTAMP
+            SET reputation = GREATEST(0, LEAST(100, reputation + $2))
             WHERE id = $1
-            RETURNING *
-        ''', company_id, specialization)
-        return dict(row) if row else None
+        ''', company_id, change)
 
+async def set_company_embed_message(company_id: int, message_id: str):
+    """Set the embed message ID for a company"""
+    async with pool.acquire() as conn:
+        await conn.execute('''
+            UPDATE companies SET embed_message_id = $2 WHERE id = $1
+        ''', company_id, message_id)
+
+async def rename_company(company_id: int, new_name: str):
+    """Rename a company"""
+    async with pool.acquire() as conn:
+        await conn.execute(
+            'UPDATE companies SET name = $2 WHERE id = $1',
+            company_id, new_name
+        )
+
+async def update_company_thread(company_id: int, thread_id: str):
+    """Update the thread_id for a company"""
+    async with pool.acquire() as conn:
+        await conn.execute(
+            'UPDATE companies SET thread_id = $2 WHERE id = $1',
+            company_id, thread_id
+        )
 
 async def delete_company(company_id: int):
     """Delete a company"""
     async with pool.acquire() as conn:
         await conn.execute('DELETE FROM companies WHERE id = $1', company_id)
 
-
-async def get_all_companies() -> List[Dict]:
-    """Get all companies"""
+async def delete_all_companies():
+    """Delete all companies from the database"""
     async with pool.acquire() as conn:
-        rows = await conn.fetch('SELECT * FROM companies ORDER BY created_at DESC')
-        return [dict(row) for row in rows]
+        await conn.execute('DELETE FROM companies')
 
 
-async def get_guild_companies_by_rank(guild_id: str, rank: str) -> List[Dict]:
-    """Get all companies in a guild by rank"""
-    # Note: This is simplified - in production you'd want guild_id in companies table
-    async with pool.acquire() as conn:
-        rows = await conn.fetch('SELECT * FROM companies WHERE rank = $1', rank)
-        return [dict(row) for row in rows]
+# ==================== COMPANY ASSETS ====================
 
-
-# ===== COMPANY MERGERS =====
-
-async def merge_companies(player_id: str, company1_id: int, company2_id: int, 
-                          resulting_rank: str, resulting_company_id: int):
-    """Record a company merger"""
-    async with pool.acquire() as conn:
-        await conn.execute('''
-            INSERT INTO company_mergers (player_id, company1_id, company2_id, resulting_rank, resulting_company_id)
-            VALUES ($1, $2, $3, $4, $5)
-        ''', player_id, company1_id, company2_id, resulting_rank, resulting_company_id)
-
-
-async def get_player_mergers(player_id: str) -> List[Dict]:
-    """Get all mergers by a player"""
-    async with pool.acquire() as conn:
-        rows = await conn.fetch('''
-            SELECT * FROM company_mergers
-            WHERE player_id = $1
-            ORDER BY merged_at DESC
-        ''', player_id)
-        return [dict(row) for row in rows]
-
-
-# ===== COMPANY ASSETS =====
-
-async def add_company_asset(company_id: int, asset_name: str, asset_type: str, 
-                           income_boost: int, cost: int, is_black_market: bool = False):
+async def add_company_asset(company_id: int, asset_name: str, asset_type: str, income_boost: int, cost: int):
     """Add an asset to a company"""
     async with pool.acquire() as conn:
         await conn.execute('''
-            INSERT INTO company_assets (company_id, asset_name, asset_type, income_boost, cost, is_black_market)
-            VALUES ($1, $2, $3, $4, $5, $6)
-        ''', company_id, asset_name, asset_type, income_boost, cost, is_black_market)
-
+            INSERT INTO company_assets (company_id, asset_name, asset_type, income_boost, cost)
+            VALUES ($1, $2, $3, $4, $5)
+        ''', company_id, asset_name, asset_type, income_boost, cost)
 
 async def get_company_assets(company_id: int) -> List[Dict]:
     """Get all assets for a company"""
     async with pool.acquire() as conn:
         rows = await conn.fetch('''
-            SELECT * FROM company_assets
-            WHERE company_id = $1
-            ORDER BY purchased_at DESC
+            SELECT * FROM company_assets WHERE company_id = $1 ORDER BY purchased_at DESC
         ''', company_id)
         return [dict(row) for row in rows]
 
 
-# Continuing in next message due to length...
+# ==================== COMPANY EVENTS ====================
 
-# ===== EVENTS =====
-
-async def log_company_event(company_id: int, event_type: str, event_description: str, income_change: int):
+async def log_company_event(company_id: int, event_type: str, description: str, income_change: int):
     """Log a company event"""
     async with pool.acquire() as conn:
         await conn.execute('''
             INSERT INTO company_events (company_id, event_type, event_description, income_change)
             VALUES ($1, $2, $3, $4)
-        ''', company_id, event_type, event_description, income_change)
-
+        ''', company_id, event_type, description, income_change)
 
 async def get_company_events(company_id: int, limit: int = 10) -> List[Dict]:
     """Get recent events for a company"""
@@ -798,913 +610,30 @@ async def get_company_events(company_id: int, limit: int = 10) -> List[Dict]:
         return [dict(row) for row in rows]
 
 
-async def get_company_event_history(company_id: int, limit: int = 5) -> List[Dict]:
-    """Alias for get_company_events"""
-    return await get_company_events(company_id, limit)
+# ==================== LOAN OPERATIONS ====================
 
-
-# ===== SERVER EVENTS =====
-
-async def create_server_event(guild_id: str, event_name: str, event_type: str, 
-                              event_description: str, effect_data: dict, duration_hours: int = 24) -> Dict:
-    """Create a new server event"""
-    async with pool.acquire() as conn:
-        ends_at = datetime.now() + timedelta(hours=duration_hours)
-        row = await conn.fetchrow('''
-            INSERT INTO server_events (guild_id, event_name, event_type, event_description, effect_data, ends_at)
-            VALUES ($1, $2, $3, $4, $5, $6)
-            RETURNING *
-        ''', guild_id, event_name, event_type, event_description, json.dumps(effect_data), ends_at)
-        return dict(row)
-
-
-async def get_active_server_events(guild_id: str) -> List[Dict]:
-    """Get all active server events"""
-    async with pool.acquire() as conn:
-        rows = await conn.fetch('''
-            SELECT * FROM server_events
-            WHERE guild_id = $1 AND is_active = TRUE 
-            AND (ends_at IS NULL OR ends_at > CURRENT_TIMESTAMP)
-            ORDER BY started_at DESC
-        ''', guild_id)
-        results = []
-        for row in rows:
-            data = dict(row)
-            if data.get('effect_data'):
-                data['effect_data'] = json.loads(data['effect_data'])
-            results.append(data)
-        return results
-
-
-async def end_server_event(event_id: int):
-    """End a server event"""
-    async with pool.acquire() as conn:
-        await conn.execute('UPDATE server_events SET is_active = FALSE WHERE id = $1', event_id)
-
-
-# ===== ACHIEVEMENTS =====
-
-async def grant_achievement(user_id: str, achievement_type: str, achievement_name: str) -> bool:
-    """Grant achievement. Returns True if newly granted"""
-    async with pool.acquire() as conn:
-        try:
-            await conn.execute('''
-                INSERT INTO achievements (user_id, achievement_type, achievement_name)
-                VALUES ($1, $2, $3)
-            ''', user_id, achievement_type, achievement_name)
-            return True
-        except asyncpg.UniqueViolationError:
-            return False
-
-
-async def get_player_achievements(user_id: str) -> List[Dict]:
-    """Get all achievements for a player"""
-    async with pool.acquire() as conn:
-        rows = await conn.fetch('''
-            SELECT * FROM achievements WHERE user_id = $1 ORDER BY achieved_at DESC
-        ''', user_id)
-        return [dict(row) for row in rows]
-
-
-async def has_achievement(user_id: str, achievement_type: str) -> bool:
-    """Check if player has achievement"""
-    async with pool.acquire() as conn:
-        result = await conn.fetchval('''
-            SELECT EXISTS(SELECT 1 FROM achievements WHERE user_id = $1 AND achievement_type = $2)
-        ''', user_id, achievement_type)
-        return result
-
-
-# ===== DAILY QUESTS =====
-
-async def create_daily_quests(guild_id: str, quest_data: dict) -> Dict:
-    """Create daily quests"""
-    async with pool.acquire() as conn:
-        quest_date = datetime.now().date()
-        row = await conn.fetchrow('''
-            INSERT INTO daily_quests (guild_id, quest_date, quest_data)
-            VALUES ($1, $2, $3)
-            ON CONFLICT (guild_id, quest_date)
-            DO UPDATE SET quest_data = $3
-            RETURNING *
-        ''', guild_id, quest_date, json.dumps(quest_data))
-        result = dict(row)
-        result['quest_data'] = json.loads(result['quest_data'])
-        return result
-
-
-async def get_daily_quests(guild_id: str) -> Optional[Dict]:
-    """Get today's daily quests"""
-    async with pool.acquire() as conn:
-        quest_date = datetime.now().date()
-        row = await conn.fetchrow('''
-            SELECT * FROM daily_quests WHERE guild_id = $1 AND quest_date = $2
-        ''', guild_id, quest_date)
-        if row:
-            result = dict(row)
-            result['quest_data'] = json.loads(result['quest_data'])
-            return result
-        return None
-
-
-async def update_quest_progress(user_id: str, guild_id: str, quest_id: int, 
-                                quest_type: str, progress: int, target: int) -> Dict:
-    """Update quest progress"""
-    async with pool.acquire() as conn:
-        completed = progress >= target
-        row = await conn.fetchrow('''
-            INSERT INTO daily_quest_progress (user_id, guild_id, quest_id, quest_type, progress, target, completed, completed_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-            ON CONFLICT (user_id, quest_id, quest_type)
-            DO UPDATE SET progress = $5, completed = $7, 
-                         completed_at = CASE WHEN $7 THEN CURRENT_TIMESTAMP ELSE NULL END
-            RETURNING *
-        ''', user_id, guild_id, quest_id, quest_type, progress, target, completed, 
-             datetime.now() if completed else None)
-        return dict(row)
-
-
-async def get_quest_progress(user_id: str, guild_id: str) -> List[Dict]:
-    """Get quest progress for user today"""
-    async with pool.acquire() as conn:
-        quest_date = datetime.now().date()
-        rows = await conn.fetch('''
-            SELECT dqp.* FROM daily_quest_progress dqp
-            JOIN daily_quests dq ON dqp.quest_id = dq.id
-            WHERE dqp.user_id = $1 AND dqp.guild_id = $2 AND dq.quest_date = $3
-        ''', user_id, guild_id, quest_date)
-        return [dict(row) for row in rows]
-
-
-# ===== BLACK MARKET =====
-
-async def log_black_market_purchase(user_id: str, purchase_type: str, company_id: Optional[int], cost: int):
-    """Log black market purchase"""
-    async with pool.acquire() as conn:
-        await conn.execute('''
-            INSERT INTO black_market_purchases (user_id, company_id, purchase_type, item_type, cost)
-            VALUES ($1, $2, $3, $3, $4)
-        ''', user_id, company_id, purchase_type, cost)
-
-
-async def record_black_market_purchase(user_id: str, company_id: int, item_type: str, cost: int):
-    """Record black market purchase (alias)"""
-    await log_black_market_purchase(user_id, item_type, company_id, cost)
-
-
-async def get_black_market_purchases(user_id: str) -> List[Dict]:
-    """Get all black market purchases"""
-    async with pool.acquire() as conn:
-        rows = await conn.fetch('''
-            SELECT * FROM black_market_purchases
-            WHERE user_id = $1 ORDER BY purchased_at DESC
-        ''', user_id)
-        return [dict(row) for row in rows]
-
-
-async def add_black_market_effect(company_id: int, effect_type: str, effect_value: float, duration_hours: int):
-    """Add black market effect"""
-    expires_at = datetime.now() + timedelta(hours=duration_hours)
-    async with pool.acquire() as conn:
-        await conn.execute('''
-            INSERT INTO black_market_effects (company_id, effect_type, effect_value, expires_at)
-            VALUES ($1, $2, $3, $4)
-            ON CONFLICT (company_id, effect_type) 
-            DO UPDATE SET effect_value = $2, expires_at = $4
-        ''', company_id, effect_type, effect_value, expires_at)
-
-
-async def get_black_market_effect(company_id: int, effect_type: str):
-    """Get black market effect"""
+async def create_loan(borrower_id: str, company_id: Optional[int], principal: int, 
+                     interest_rate: float, total_owed: int, loan_tier: str, 
+                     due_date: datetime, thread_id: str) -> Dict:
+    """Create a new loan"""
     async with pool.acquire() as conn:
         row = await conn.fetchrow('''
-            SELECT * FROM black_market_effects
-            WHERE company_id = $1 AND effect_type = $2
-            AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
-        ''', company_id, effect_type)
-        return dict(row) if row else None
-
-
-async def consume_black_market_effect(effect_id: int):
-    """Consume/remove effect"""
-    async with pool.acquire() as conn:
-        await conn.execute('DELETE FROM black_market_effects WHERE id = $1', effect_id)
-
-
-# ===== SABOTAGE =====
-
-async def create_sabotage_action(attacker_id: str, target_company_id: int, action_type: str,
-                                  spy_count: int = 0, planning_cost: int = 0, 
-                                  preparation_time_hours: int = 0) -> Dict:
-    """Create sabotage action"""
-    async with pool.acquire() as conn:
-        ready_at = datetime.now() + timedelta(hours=preparation_time_hours) if preparation_time_hours > 0 else datetime.now()
-        is_prepared = preparation_time_hours == 0
-        
-        # Get attacker's company
-        attacker_company = await conn.fetchrow(
-            'SELECT id FROM companies WHERE owner_id = $1 LIMIT 1', attacker_id
-        )
-        if not attacker_company:
-            raise ValueError("Attacker has no company")
-        
-        row = await conn.fetchrow('''
-            INSERT INTO sabotage_operations 
-            (saboteur_company_id, target_company_id, action_type, spy_count, planning_cost, 
-             preparation_time_hours, is_prepared, ready_at)
+            INSERT INTO loans (borrower_id, company_id, principal_amount, interest_rate, 
+                             total_owed, loan_tier, due_date, thread_id)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
             RETURNING *
-        ''', attacker_company['id'], target_company_id, action_type, spy_count, planning_cost,
-             preparation_time_hours, is_prepared, ready_at)
+        ''', borrower_id, company_id, principal, interest_rate, total_owed, loan_tier, due_date, thread_id)
         return dict(row)
 
-
-async def record_sabotage_operation(saboteur_company_id: int, target_company_id: int,
-                                     was_successful: bool, was_caught: bool, damage_dealt: int):
-    """Record sabotage operation"""
+async def set_loan_embed_message(loan_id: int, message_id: str):
+    """Set the embed message ID for a loan"""
     async with pool.acquire() as conn:
         await conn.execute('''
-            INSERT INTO sabotage_operations 
-            (saboteur_company_id, target_company_id, was_successful, was_caught, damage_dealt, executed = TRUE)
-            VALUES ($1, $2, $3, $4, $5)
-        ''', saboteur_company_id, target_company_id, was_successful, was_caught, damage_dealt)
-
-
-async def get_ready_sabotage_actions(attacker_id: str) -> List[Dict]:
-    """Get ready sabotage actions"""
-    async with pool.acquire() as conn:
-        rows = await conn.fetch('''
-            SELECT so.* FROM sabotage_operations so
-            JOIN companies c ON so.saboteur_company_id = c.id
-            WHERE c.owner_id = $1 AND so.is_prepared = TRUE AND so.executed = FALSE
-            ORDER BY so.ready_at DESC
-        ''', attacker_id)
-        return [dict(row) for row in rows]
-
-
-async def execute_sabotage_action(sabotage_id: int, was_caught: bool):
-    """Mark sabotage as executed"""
-    async with pool.acquire() as conn:
-        await conn.execute('''
-            UPDATE sabotage_operations
-            SET executed = TRUE, was_caught = $2, executed_at = CURRENT_TIMESTAMP
-            WHERE id = $1
-        ''', sabotage_id, was_caught)
-
-
-# ===== ESPIONAGE =====
-
-async def record_espionage_mission(spy_company_id: int, target_company_id: int,
-                                    mission_type: str, was_successful: bool):
-    """Record espionage mission"""
-    async with pool.acquire() as conn:
-        await conn.execute('''
-            INSERT INTO espionage_missions (spy_company_id, target_company_id, mission_type, was_successful)
-            VALUES ($1, $2, $3, $4)
-        ''', spy_company_id, target_company_id, mission_type, was_successful)
-
-
-# ===== COMPANY RAIDS =====
-
-async def record_company_raid(attacker_company_id: int, target_company_id: int,
-                               was_successful: bool, income_stolen: int, raid_cost: int):
-    """Record company raid"""
-    async with pool.acquire() as conn:
-        await conn.execute('''
-            INSERT INTO company_raids 
-            (attacker_company_id, target_company_id, was_successful, income_stolen, raid_cost)
-            VALUES ($1, $2, $3, $4, $5)
-        ''', attacker_company_id, target_company_id, was_successful, income_stolen, raid_cost)
-
-
-async def create_company_battle(attacker_company_id: int, defender_company_id: int,
-                                 battle_cost: int, duration_hours: int = 24) -> Dict:
-    """Create company battle"""
-    async with pool.acquire() as conn:
-        ends_at = datetime.now() + timedelta(hours=duration_hours)
-        row = await conn.fetchrow('''
-            INSERT INTO company_raids
-            (attacker_company_id, target_company_id, was_successful, raid_cost, battle_duration_hours, ends_at)
-            VALUES ($1, $2, FALSE, $3, $4, $5)
-            RETURNING *
-        ''', attacker_company_id, defender_company_id, battle_cost, duration_hours, ends_at)
-        return dict(row)
-
-
-async def resolve_company_battle(battle_id: int, success: bool, income_stolen: int):
-    """Resolve company battle"""
-    async with pool.acquire() as conn:
-        await conn.execute('''
-            UPDATE company_raids
-            SET was_successful = $2, income_stolen = $3
-            WHERE id = $1
-        ''', battle_id, success, income_stolen)
-
-
-async def get_recent_raid(company_id: int):
-    """Get most recent raid"""
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow('''
-            SELECT * FROM company_raids
-            WHERE attacker_company_id = $1
-            ORDER BY raid_time DESC LIMIT 1
-        ''', company_id)
-        return dict(row) if row else None
-
-
-async def get_company_raid_history(company_id: int, limit: int = 10):
-    """Get raid history"""
-    async with pool.acquire() as conn:
-        rows = await conn.fetch('''
-            SELECT * FROM company_raids
-            WHERE attacker_company_id = $1 OR target_company_id = $1
-            ORDER BY raid_time DESC LIMIT $2
-        ''', company_id, limit)
-        return [dict(row) for row in rows]
-
-
-async def get_active_company_battles(company_id: int) -> List[Dict]:
-    """Get active battles"""
-    async with pool.acquire() as conn:
-        rows = await conn.fetch('''
-            SELECT * FROM company_raids
-            WHERE (attacker_company_id = $1 OR target_company_id = $1)
-            AND ends_at > CURRENT_TIMESTAMP
-            ORDER BY raid_time DESC
-        ''', company_id)
-        return [dict(row) for row in rows]
-
-
-# ===== MEGA PROJECTS =====
-
-async def create_mega_project(guild_id: str, project_key: str, project_name: str,
-                               project_rank: str, project_description: str, cost: int,
-                               owner_id: str, effect_data: dict) -> Dict:
-    """Create mega project"""
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow('''
-            INSERT INTO mega_projects 
-            (guild_id, project_key, project_name, project_rank, project_description, cost, owner_id, funder_id, effect_data)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $7, $8)
-            RETURNING *
-        ''', guild_id, project_key, project_name, project_rank, project_description, cost, owner_id, json.dumps(effect_data))
-        result = dict(row)
-        result['effect_data'] = json.loads(result['effect_data'])
-        return result
-
-
-async def get_active_mega_projects(guild_id: str) -> List[Dict]:
-    """Get active mega projects"""
-    async with pool.acquire() as conn:
-        rows = await conn.fetch('''
-            SELECT * FROM mega_projects
-            WHERE guild_id = $1 AND is_active = TRUE
-            ORDER BY created_at DESC
-        ''', guild_id)
-        results = []
-        for row in rows:
-            data = dict(row)
-            if data.get('effect_data'):
-                data['effect_data'] = json.loads(data['effect_data'])
-            results.append(data)
-        return results
-
-
-async def get_mega_projects_by_rank(guild_id: str, rank: str) -> List[Dict]:
-    """Get mega projects by rank"""
-    async with pool.acquire() as conn:
-        rows = await conn.fetch('''
-            SELECT * FROM mega_projects
-            WHERE guild_id = $1 AND project_rank = $2 AND is_active = TRUE
-        ''', guild_id, rank)
-        results = []
-        for row in rows:
-            data = dict(row)
-            if data.get('effect_data'):
-                data['effect_data'] = json.loads(data['effect_data'])
-            results.append(data)
-        return results
-
-
-async def get_completed_mega_projects(guild_id: str) -> List[Dict]:
-    """Get completed mega projects"""
-    return await get_active_mega_projects(guild_id)
-
-
-# ===== CORPORATIONS =====
-
-async def create_corporation(guild_id: str, name: str, leader_id: str, tag: str = None) -> int:
-    """Create corporation"""
-    if not tag:
-        tag = name[:3].upper()
-    
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow('''
-            INSERT INTO corporations (guild_id, name, tag, leader_id)
-            VALUES ($1, $2, $3, $4)
-            RETURNING id
-        ''', guild_id, name, tag, leader_id)
-        return row['id']
-
-
-async def get_corporation(corp_id: int) -> Optional[Dict]:
-    """Get corporation by ID"""
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow('SELECT * FROM corporations WHERE id = $1', corp_id)
-        return dict(row) if row else None
-
-
-async def get_corporation_by_id(corp_id: int) -> Optional[Dict]:
-    """Alias for get_corporation"""
-    return await get_corporation(corp_id)
-
-
-async def get_corporation_by_name(guild_id: str, name: str) -> Optional[Dict]:
-    """Get corporation by name"""
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow('''
-            SELECT * FROM corporations
-            WHERE guild_id = $1 AND LOWER(name) = LOWER($2)
-        ''', guild_id, name)
-        return dict(row) if row else None
-
-
-async def get_corporation_by_tag(guild_id: str, tag: str) -> Optional[Dict]:
-    """Get corporation by tag"""
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow('''
-            SELECT * FROM corporations
-            WHERE guild_id = $1 AND UPPER(tag) = UPPER($2)
-        ''', guild_id, tag)
-        return dict(row) if row else None
-
-
-async def get_player_corporation(guild_id: str, user_id: str) -> Optional[Dict]:
-    """Get player's corporation"""
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow('''
-            SELECT c.* FROM corporations c
-            JOIN corporation_members cm ON c.id = cm.corporation_id
-            WHERE c.guild_id = $1 AND cm.user_id = $2
-        ''', guild_id, user_id)
-        return dict(row) if row else None
-
-
-async def add_corporation_member(corp_id: int, user_id: str, role: str = 'member'):
-    """Add member to corporation"""
-    async with pool.acquire() as conn:
-        await conn.execute('''
-            INSERT INTO corporation_members (corporation_id, user_id, role)
-            VALUES ($1, $2, $3)
-        ''', corp_id, user_id, role)
-
-
-async def remove_corporation_member(corp_id: int, user_id: str):
-    """Remove member from corporation"""
-    async with pool.acquire() as conn:
-        await conn.execute('''
-            DELETE FROM corporation_members
-            WHERE corporation_id = $1 AND user_id = $2
-        ''', corp_id, user_id)
-
-
-async def get_corporation_member(corp_id: int, user_id: str):
-    """Get corporation member"""
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow('''
-            SELECT * FROM corporation_members
-            WHERE corporation_id = $1 AND user_id = $2
-        ''', corp_id, user_id)
-        return dict(row) if row else None
-
-
-async def get_corporation_members(corp_id: int) -> List[Dict]:
-    """Get all corporation members"""
-    async with pool.acquire() as conn:
-        rows = await conn.fetch('''
-            SELECT cm.*, p.username, p.balance
-            FROM corporation_members cm
-            JOIN players p ON cm.user_id = p.user_id
-            WHERE cm.corporation_id = $1
-            ORDER BY 
-                CASE cm.role 
-                    WHEN 'leader' THEN 1 
-                    WHEN 'officer' THEN 2 
-                    ELSE 3 
-                END,
-                cm.joined_at ASC
-        ''', corp_id)
-        return [dict(row) for row in rows]
-
-
-async def get_corporation_member_count(corp_id: int) -> int:
-    """Get member count"""
-    async with pool.acquire() as conn:
-        count = await conn.fetchval('''
-            SELECT COUNT(*) FROM corporation_members WHERE corporation_id = $1
-        ''', corp_id)
-        return count or 0
-
-
-async def add_to_corporation_treasury(corp_id: int, amount: int):
-    """Add to treasury"""
-    async with pool.acquire() as conn:
-        await conn.execute('''
-            UPDATE corporations SET treasury = treasury + $1 WHERE id = $2
-        ''', amount, corp_id)
-
-
-async def delete_corporation(corp_id: int):
-    """Delete corporation"""
-    async with pool.acquire() as conn:
-        await conn.execute('DELETE FROM corporations WHERE id = $1', corp_id)
-
-
-async def get_all_corporations(guild_id: str) -> List[Dict]:
-    """Get all corporations in guild"""
-    async with pool.acquire() as conn:
-        rows = await conn.fetch('''
-            SELECT * FROM corporations
-            WHERE guild_id = $1
-            ORDER BY level DESC, treasury DESC
-        ''', guild_id)
-        return [dict(row) for row in rows]
-
-
-async def get_guild_corporations(guild_id: str) -> List[Dict]:
-    """Alias for get_all_corporations"""
-    return await get_all_corporations(guild_id)
-
-
-async def get_corporation_stats(corp_id: int) -> Dict:
-    """Get corporation stats"""
-    async with pool.acquire() as conn:
-        total_raids = await conn.fetchval('''
-            SELECT COUNT(*) FROM company_raids cr
-            JOIN companies c ON cr.attacker_company_id = c.id
-            JOIN corporation_members cm ON c.owner_id = cm.user_id
-            WHERE cm.corporation_id = $1
-        ''', corp_id) or 0
-        
-        wars_won = await conn.fetchval(
-            'SELECT wars_won FROM corporations WHERE id = $1', corp_id
-        ) or 0
-        
-        return {
-            'total_raids': total_raids,
-            'wars_won': wars_won
-        }
-
-
-# ===== CORPORATION WARS =====
-
-async def create_corporation_war(attacker_corp_id: int, defender_corp_id: int,
-                                  prize_pool: int, duration_hours: int = 168) -> int:
-    """Create corporation war"""
-    ends_at = datetime.now() + timedelta(hours=duration_hours)
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow('''
-            INSERT INTO corporation_wars (attacker_corp_id, defender_corp_id, prize_pool, ends_at)
-            VALUES ($1, $2, $3, $4)
-            RETURNING id
-        ''', attacker_corp_id, defender_corp_id, prize_pool, ends_at)
-        return row['id']
-
-
-async def create_corporation_battle(attacker_corp_id: int, defender_corp_id: int,
-                                     battle_cost: int, duration_hours: int = 24) -> Dict:
-    """Alias for create_corporation_war"""
-    war_id = await create_corporation_war(attacker_corp_id, defender_corp_id, battle_cost, duration_hours)
-    return await get_active_corporation_war_by_id(war_id)
-
-
-async def resolve_corporation_battle(battle_id: int, success: bool, reward_amount: int):
-    """Resolve corporation battle"""
-    async with pool.acquire() as conn:
-        winner_id = None
-        if success:
-            war = await conn.fetchrow('SELECT attacker_corp_id FROM corporation_wars WHERE id = $1', battle_id)
-            if war:
-                winner_id = war['attacker_corp_id']
-        
-        await conn.execute('''
-            UPDATE corporation_wars
-            SET winner_corp_id = $2, is_active = FALSE
-            WHERE id = $1
-        ''', battle_id, winner_id)
-
-
-async def get_active_corporation_war(attacker_corp_id: int, defender_corp_id: int):
-    """Get active war between corps"""
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow('''
-            SELECT * FROM corporation_wars
-            WHERE ((attacker_corp_id = $1 AND defender_corp_id = $2)
-               OR (attacker_corp_id = $2 AND defender_corp_id = $1))
-            AND is_active = TRUE
-        ''', attacker_corp_id, defender_corp_id)
-        return dict(row) if row else None
-
-
-async def get_active_corporation_war_by_id(war_id: int):
-    """Get war by ID"""
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow('SELECT * FROM corporation_wars WHERE id = $1', war_id)
-        return dict(row) if row else None
-
-
-async def get_active_corporation_wars(guild_id: str) -> List[Dict]:
-    """Get all active wars in guild"""
-    async with pool.acquire() as conn:
-        rows = await conn.fetch('''
-            SELECT cw.* FROM corporation_wars cw
-            JOIN corporations c ON cw.attacker_corp_id = c.id
-            WHERE c.guild_id = $1 AND cw.is_active = TRUE
-            ORDER BY cw.started_at DESC
-        ''', guild_id)
-        return [dict(row) for row in rows]
-
-
-async def get_corporation_war_by_id(war_id: int) -> Optional[Dict]:
-    """Get any war by ID (active or not)"""
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow('SELECT * FROM corporation_wars WHERE id = $1', war_id)
-        return dict(row) if row else None
-
-
-async def end_corporation_war(war_id: int, winner_corp_id: Optional[int] = None, forced: bool = False):
-    """End a corporation war"""
-    async with pool.acquire() as conn:
-        # Update war status
-        await conn.execute('''
-            UPDATE corporation_wars
-            SET is_active = FALSE, 
-                winner_corp_id = $2,
-                ended = TRUE,
-                ended_at = $3
-            WHERE id = $1
-        ''', war_id, winner_corp_id, datetime.now())
-        
-        # If there's a winner and not forced, update their stats
-        if winner_corp_id and not forced:
-            await conn.execute('''
-                UPDATE corporations
-                SET wars_won = wars_won + 1
-                WHERE id = $1
-            ''', winner_corp_id)
-
-
-async def update_corporation_treasury(corp_id: int, amount: int):
-    """Update corporation treasury (can be positive or negative)"""
-    async with pool.acquire() as conn:
-        await conn.execute('''
-            UPDATE corporations SET treasury = treasury + $1 WHERE id = $2
-        ''', amount, corp_id)
-
-
-# Continuing in next message...
-
-# ===== NPC COMPANIES =====
-
-async def create_npc_company(guild_id: str, company_key: str, name: str, rank: str,
-                             sector: str, base_value: int, share_price: int) -> int:
-    """Create NPC company"""
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow('''
-            INSERT INTO npc_companies 
-            (guild_id, company_key, name, rank, sector, base_value, base_income, 
-             current_value, current_income, share_price)
-            VALUES ($1, $2, $3, $4, $5, $6, $6, $6, $6, $7)
-            RETURNING id
-        ''', guild_id, company_key, name, rank, sector, base_value, share_price)
-        return row['id']
-
-
-async def get_npc_company(npc_company_id: int) -> Optional[Dict]:
-    """Get NPC company by ID"""
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow('SELECT * FROM npc_companies WHERE id = $1', npc_company_id)
-        return dict(row) if row else None
-
-
-async def get_npc_company_by_id(npc_company_id: int) -> Optional[Dict]:
-    """Alias for get_npc_company"""
-    return await get_npc_company(npc_company_id)
-
-
-async def get_npc_company_by_key(guild_id: str, company_key: str):
-    """Get NPC company by key"""
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow('''
-            SELECT * FROM npc_companies WHERE guild_id = $1 AND company_key = $2
-        ''', guild_id, company_key)
-        return dict(row) if row else None
-
-
-async def get_npc_company_by_name(guild_id: str, name: str):
-    """Get NPC company by name"""
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow('''
-            SELECT * FROM npc_companies
-            WHERE guild_id = $1 AND LOWER(name) = LOWER($2)
-        ''', guild_id, name)
-        return dict(row) if row else None
-
-
-async def get_all_npc_companies(guild_id: str) -> List[Dict]:
-    """Get all NPC companies"""
-    async with pool.acquire() as conn:
-        rows = await conn.fetch('''
-            SELECT * FROM npc_companies WHERE guild_id = $1 ORDER BY name ASC
-        ''', guild_id)
-        return [dict(row) for row in rows]
-
-
-async def get_guild_npc_companies(guild_id: str) -> List[Dict]:
-    """Alias for get_all_npc_companies"""
-    return await get_all_npc_companies(guild_id)
-
-
-async def update_npc_company_value(npc_company_id: int, new_value: int):
-    """Update NPC company value"""
-    async with pool.acquire() as conn:
-        await conn.execute('''
-            UPDATE npc_companies SET current_value = $1 WHERE id = $2
-        ''', new_value, npc_company_id)
-
-
-async def update_npc_company_income(npc_company_id: int, income_change: int):
-    """Update NPC company income"""
-    async with pool.acquire() as conn:
-        await conn.execute('''
-            UPDATE npc_companies
-            SET current_income = current_income + $2, last_event_at = CURRENT_TIMESTAMP
-            WHERE id = $1
-        ''', npc_company_id, income_change)
-
-
-# ===== NPC INVESTMENTS =====
-
-async def invest_in_npc_company(user_id: str, npc_company_id: int, shares: int, amount: int) -> Dict:
-    """Create/update NPC investment"""
-    async with pool.acquire() as conn:
-        await conn.execute('''
-            UPDATE npc_companies
-            SET available_shares = available_shares - $2
-            WHERE id = $1
-        ''', npc_company_id, shares)
-        
-        row = await conn.fetchrow('''
-            INSERT INTO npc_investments (user_id, npc_company_id, shares, shares_owned, purchase_price, invested_amount)
-            VALUES ($1, $2, $3, $3, $4, $4)
-            ON CONFLICT (user_id, npc_company_id)
-            DO UPDATE SET 
-                shares = npc_investments.shares + $3,
-                shares_owned = npc_investments.shares_owned + $3,
-                invested_amount = npc_investments.invested_amount + $4
-            RETURNING *
-        ''', user_id, npc_company_id, shares, amount)
-        return dict(row)
-
-
-async def create_npc_investment(user_id: str, npc_company_id: int, shares: int, purchase_price: int) -> int:
-    """Create NPC investment (alias)"""
-    result = await invest_in_npc_company(user_id, npc_company_id, shares, purchase_price)
-    return result['id']
-
-
-async def get_player_npc_investment(user_id: str, npc_company_id: int):
-    """Get player's investment in NPC company"""
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow('''
-            SELECT * FROM npc_investments
-            WHERE user_id = $1 AND npc_company_id = $2
-        ''', user_id, npc_company_id)
-        return dict(row) if row else None
-
-
-async def get_player_investments(user_id: str) -> List[Dict]:
-    """Get all player investments"""
-    async with pool.acquire() as conn:
-        rows = await conn.fetch('''
-            SELECT * FROM npc_investments WHERE user_id = $1
-        ''', user_id)
-        return [dict(row) for row in rows]
-
-
-async def get_player_npc_investments(user_id: str) -> List[Dict]:
-    """Get player NPC investments with company data"""
-    async with pool.acquire() as conn:
-        rows = await conn.fetch('''
-            SELECT ni.*, nc.name, nc.rank, nc.current_income, nc.share_price
-            FROM npc_investments ni
-            JOIN npc_companies nc ON ni.npc_company_id = nc.id
-            WHERE ni.user_id = $1
-            ORDER BY ni.invested_at DESC
-        ''', user_id)
-        return [dict(row) for row in rows]
-
-
-async def get_all_investments() -> List[Dict]:
-    """Get all investments"""
-    async with pool.acquire() as conn:
-        rows = await conn.fetch('SELECT * FROM npc_investments')
-        return [dict(row) for row in rows]
-
-
-async def update_npc_investment_shares(investment_id: int, new_shares: int):
-    """Update investment shares"""
-    async with pool.acquire() as conn:
-        await conn.execute('''
-            UPDATE npc_investments SET shares = $1, shares_owned = $1 WHERE id = $2
-        ''', new_shares, investment_id)
-
-
-async def delete_npc_investment(investment_id: int):
-    """Delete NPC investment"""
-    async with pool.acquire() as conn:
-        await conn.execute('DELETE FROM npc_investments WHERE id = $1', investment_id)
-
-
-async def record_dividend_payment(investment_id: int, amount: int):
-    """Record dividend payment"""
-    async with pool.acquire() as conn:
-        await conn.execute('''
-            INSERT INTO npc_dividend_payments (investment_id, amount)
-            VALUES ($1, $2)
-        ''', investment_id, amount)
-
-
-# ===== HALL OF FAME =====
-
-async def set_hall_of_fame_record(guild_id: str, category: str, user_id: str,
-                                   record_value: int, additional_info: str = None):
-    """Set Hall of Fame record"""
-    async with pool.acquire() as conn:
-        await conn.execute('''
-            INSERT INTO hall_of_fame (guild_id, category, user_id, record_value, additional_info)
-            VALUES ($1, $2, $3, $4, $5)
-            ON CONFLICT (guild_id, category)
-            DO UPDATE SET user_id = $3, record_value = $4, additional_info = $5, achieved_at = CURRENT_TIMESTAMP
-        ''', guild_id, category, user_id, record_value, additional_info)
-
-
-async def get_hall_of_fame_record(guild_id: str, category: str):
-    """Get Hall of Fame record"""
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow('''
-            SELECT * FROM hall_of_fame WHERE guild_id = $1 AND category = $2
-        ''', guild_id, category)
-        return dict(row) if row else None
-
-
-async def get_guild_hall_of_fame(guild_id: str) -> List[Dict]:
-    """Get all Hall of Fame records"""
-    async with pool.acquire() as conn:
-        rows = await conn.fetch('''
-            SELECT * FROM hall_of_fame WHERE guild_id = $1 ORDER BY achieved_at DESC
-        ''', guild_id)
-        return [dict(row) for row in rows]
-
-
-async def record_hall_of_fame_announcement(guild_id: str, user_id: str, category: str):
-    """Record Hall of Fame announcement"""
-    async with pool.acquire() as conn:
-        await conn.execute('''
-            INSERT INTO hall_of_fame_announcements (guild_id, user_id, category)
-            VALUES ($1, $2, $3)
-        ''', guild_id, user_id, category)
-
-
-async def set_hall_of_fame_channel(guild_id: str, channel_id: str):
-    """Set Hall of Fame channel"""
-    async with pool.acquire() as conn:
-        await conn.execute('''
-            INSERT INTO guild_settings (guild_id, hall_of_fame_channel_id)
-            VALUES ($1, $2)
-            ON CONFLICT (guild_id)
-            DO UPDATE SET hall_of_fame_channel_id = $2
-        ''', guild_id, channel_id)
-
-
-# ===== LOANS =====
-
-async def create_loan(borrower_id: str, company_id: Optional[int], principal_amount: int,
-                      interest_rate: float, total_owed: int, loan_tier: str,
-                      due_date: datetime) -> Dict:
-    """Create loan"""
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow('''
-            INSERT INTO loans 
-            (borrower_id, company_id, principal_amount, interest_rate, total_owed, loan_tier, due_date)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
-            RETURNING *
-        ''', borrower_id, company_id, principal_amount, interest_rate, total_owed, loan_tier, due_date)
-        return dict(row)
-
+            UPDATE loans SET embed_message_id = $2 WHERE id = $1
+        ''', loan_id, message_id)
 
 async def get_player_loans(user_id: str, unpaid_only: bool = False) -> List[Dict]:
-    """Get player loans"""
+    """Get loans for a player"""
     async with pool.acquire() as conn:
         if unpaid_only:
             rows = await conn.fetch('''
@@ -1720,25 +649,25 @@ async def get_player_loans(user_id: str, unpaid_only: bool = False) -> List[Dict
             ''', user_id)
         return [dict(row) for row in rows]
 
-
 async def get_loan_by_id(loan_id: int) -> Optional[Dict]:
-    """Get loan by ID"""
+    """Get a loan by ID"""
     async with pool.acquire() as conn:
         row = await conn.fetchrow('SELECT * FROM loans WHERE id = $1', loan_id)
         return dict(row) if row else None
 
-
 async def pay_loan(loan_id: int) -> Dict:
-    """Mark loan as paid"""
+    """Mark a loan as paid"""
     async with pool.acquire() as conn:
         row = await conn.fetchrow('''
-            UPDATE loans SET is_paid = TRUE WHERE id = $1 RETURNING *
+            UPDATE loans
+            SET is_paid = TRUE
+            WHERE id = $1
+            RETURNING *
         ''', loan_id)
         return dict(row) if row else None
 
-
 async def get_overdue_loans() -> List[Dict]:
-    """Get overdue loans"""
+    """Get all overdue unpaid loans"""
     async with pool.acquire() as conn:
         rows = await conn.fetch('''
             SELECT * FROM loans
@@ -1747,39 +676,32 @@ async def get_overdue_loans() -> List[Dict]:
         ''')
         return [dict(row) for row in rows]
 
-
-async def set_loan_thread(loan_id: int, thread_id: str, embed_message_id: str):
-    """Set loan thread"""
-    async with pool.acquire() as conn:
-        await conn.execute('''
-            UPDATE loans SET thread_id = $2, embed_message_id = $3 WHERE id = $1
-        ''', loan_id, thread_id, embed_message_id)
-
-
-# ===== LEADERBOARD =====
-
-async def get_top_players(limit: int = 25, offset: int = 0) -> List[Dict]:
-    """Get top players"""
+async def get_all_active_loans() -> List[Dict]:
+    """Get all unpaid loans (active and overdue)"""
     async with pool.acquire() as conn:
         rows = await conn.fetch('''
-            SELECT user_id, username, balance,
-                   ROW_NUMBER() OVER (ORDER BY balance DESC) as rank
-            FROM players
-            WHERE balance > 0
-            ORDER BY balance DESC
-            LIMIT $1 OFFSET $2
-        ''', limit, offset)
+            SELECT * FROM loans
+            WHERE is_paid = FALSE
+            ORDER BY due_date
+        ''')
         return [dict(row) for row in rows]
 
-
-async def get_total_player_count() -> int:
-    """Get total player count"""
+async def forgive_all_loans():
+    """Mark all unpaid loans as paid (forgive)"""
     async with pool.acquire() as conn:
-        count = await conn.fetchval('SELECT COUNT(*) FROM players WHERE balance > 0')
-        return count or 0
+        await conn.execute('''
+            UPDATE loans SET is_paid = TRUE WHERE is_paid = FALSE
+        ''')
+
+async def reset_all_balances():
+    """Set every player's balance to 0"""
+    async with pool.acquire() as conn:
+        await conn.execute('''
+            UPDATE players SET balance = 0, updated_at = CURRENT_TIMESTAMP
+        ''')
 
 
-# ===== GUILD SETTINGS =====
+# ==================== GUILD SETTINGS ====================
 
 async def get_guild_settings(guild_id: str) -> Optional[Dict]:
     """Get guild settings"""
@@ -1787,9 +709,8 @@ async def get_guild_settings(guild_id: str) -> Optional[Dict]:
         row = await conn.fetchrow('SELECT * FROM guild_settings WHERE guild_id = $1', guild_id)
         return dict(row) if row else None
 
-
 async def set_company_forum(guild_id: str, forum_id: str):
-    """Set company forum"""
+    """Set or update company forum"""
     async with pool.acquire() as conn:
         await conn.execute('''
             INSERT INTO guild_settings (guild_id, company_forum_id)
@@ -1798,9 +719,8 @@ async def set_company_forum(guild_id: str, forum_id: str):
             DO UPDATE SET company_forum_id = $2
         ''', guild_id, forum_id)
 
-
 async def set_bank_forum(guild_id: str, forum_id: str):
-    """Set bank forum"""
+    """Set or update bank forum"""
     async with pool.acquire() as conn:
         await conn.execute('''
             INSERT INTO guild_settings (guild_id, bank_forum_id)
@@ -1809,9 +729,8 @@ async def set_bank_forum(guild_id: str, forum_id: str):
             DO UPDATE SET bank_forum_id = $2
         ''', guild_id, forum_id)
 
-
 async def set_leaderboard_channel(guild_id: str, channel_id: str, message_id: str):
-    """Set leaderboard channel"""
+    """Set or update guild leaderboard message"""
     async with pool.acquire() as conn:
         await conn.execute('''
             INSERT INTO guild_settings (guild_id, leaderboard_channel_id, leaderboard_message_id)
@@ -1820,80 +739,12 @@ async def set_leaderboard_channel(guild_id: str, channel_id: str, message_id: st
             DO UPDATE SET leaderboard_channel_id = $2, leaderboard_message_id = $3
         ''', guild_id, channel_id, message_id)
 
-
 async def upsert_guild_leaderboard(guild_id: str, channel_id: str, message_id: str):
     """Alias for set_leaderboard_channel"""
     await set_leaderboard_channel(guild_id, channel_id, message_id)
 
-
-async def set_announcements_channel(guild_id: str, channel_id: str):
-    """Set announcements channel"""
-    async with pool.acquire() as conn:
-        await conn.execute('''
-            INSERT INTO guild_settings (guild_id, announcements_channel_id)
-            VALUES ($1, $2)
-            ON CONFLICT (guild_id)
-            DO UPDATE SET announcements_channel_id = $2
-        ''', guild_id, channel_id)
-
-
-async def set_achievements_channel(guild_id: str, channel_id: str):
-    """Set achievements channel"""
-    async with pool.acquire() as conn:
-        await conn.execute('''
-            INSERT INTO guild_settings (guild_id, achievements_channel_id)
-            VALUES ($1, $2)
-            ON CONFLICT (guild_id)
-            DO UPDATE SET achievements_channel_id = $2
-        ''', guild_id, channel_id)
-
-
-async def set_npc_companies_channel(guild_id: str, channel_id: str, message_id: Optional[str] = None):
-    """Set NPC companies channel"""
-    async with pool.acquire() as conn:
-        await conn.execute('''
-            INSERT INTO guild_settings (guild_id, npc_companies_channel_id, npc_companies_message_id)
-            VALUES ($1, $2, $3)
-            ON CONFLICT (guild_id)
-            DO UPDATE SET npc_companies_channel_id = $2, npc_companies_message_id = $3
-        ''', guild_id, channel_id, message_id)
-
-
-async def set_bankruptcy_channel(guild_id: str, channel_id: str):
-    """Set bankruptcy channel"""
-    async with pool.acquire() as conn:
-        await conn.execute('''
-            INSERT INTO guild_settings (guild_id, bankruptcy_channel_id)
-            VALUES ($1, $2)
-            ON CONFLICT (guild_id)
-            DO UPDATE SET bankruptcy_channel_id = $2
-        ''', guild_id, channel_id)
-
-
-async def set_registration_settings(guild_id: str, channel_id: str, message_id: str, role_id: str):
-    """Set registration settings"""
-    async with pool.acquire() as conn:
-        await conn.execute('''
-            INSERT INTO guild_settings (guild_id, registration_channel_id, registration_message_id, registration_role_id)
-            VALUES ($1, $2, $3, $4)
-            ON CONFLICT (guild_id)
-            DO UPDATE SET registration_channel_id = $2, registration_message_id = $3, registration_role_id = $4
-        ''', guild_id, channel_id, message_id, role_id)
-
-
-async def set_daily_quest_message(guild_id: str, message_id: str):
-    """Set daily quest message"""
-    async with pool.acquire() as conn:
-        await conn.execute('''
-            INSERT INTO guild_settings (guild_id, daily_quest_message_id)
-            VALUES ($1, $2)
-            ON CONFLICT (guild_id)
-            DO UPDATE SET daily_quest_message_id = $2
-        ''', guild_id, message_id)
-
-
 async def set_event_frequency(guild_id: str, hours: int):
-    """Set event frequency"""
+    """Set or update event frequency in hours"""
     async with pool.acquire() as conn:
         await conn.execute('''
             INSERT INTO guild_settings (guild_id, event_frequency_hours)
@@ -1902,9 +753,8 @@ async def set_event_frequency(guild_id: str, hours: int):
             DO UPDATE SET event_frequency_hours = $2
         ''', guild_id, hours)
 
-
 async def get_event_frequency(guild_id: str) -> int:
-    """Get event frequency"""
+    """Get event frequency for a guild (default 6 hours)"""
     async with pool.acquire() as conn:
         result = await conn.fetchval(
             'SELECT event_frequency_hours FROM guild_settings WHERE guild_id = $1',
@@ -1912,51 +762,8 @@ async def get_event_frequency(guild_id: str) -> int:
         )
         return result if result is not None else 6
 
-
-async def set_sabotage_catch_chance(guild_id: str, chance: float):
-    """Set sabotage catch chance"""
-    async with pool.acquire() as conn:
-        await conn.execute('''
-            INSERT INTO guild_settings (guild_id, sabotage_catch_chance)
-            VALUES ($1, $2)
-            ON CONFLICT (guild_id)
-            DO UPDATE SET sabotage_catch_chance = $2
-        ''', guild_id, chance)
-
-
-async def get_sabotage_catch_chance(guild_id: str) -> float:
-    """Get sabotage catch chance"""
-    async with pool.acquire() as conn:
-        result = await conn.fetchval(
-            'SELECT sabotage_catch_chance FROM guild_settings WHERE guild_id = $1',
-            guild_id
-        )
-        return float(result) if result is not None else 0.20
-
-
-async def set_specialization_cooldown(guild_id: str, hours: int):
-    """Set specialization cooldown"""
-    async with pool.acquire() as conn:
-        await conn.execute('''
-            INSERT INTO guild_settings (guild_id, specialization_cooldown_hours)
-            VALUES ($1, $2)
-            ON CONFLICT (guild_id)
-            DO UPDATE SET specialization_cooldown_hours = $2
-        ''', guild_id, hours)
-
-
-async def get_specialization_cooldown(guild_id: str) -> int:
-    """Get specialization cooldown"""
-    async with pool.acquire() as conn:
-        result = await conn.fetchval(
-            'SELECT specialization_cooldown_hours FROM guild_settings WHERE guild_id = $1',
-            guild_id
-        )
-        return result if result is not None else 24
-
-
 async def set_admin_roles(guild_id: str, role_ids: List[str]):
-    """Set admin roles"""
+    """Set or update admin roles for a guild"""
     async with pool.acquire() as conn:
         await conn.execute('''
             INSERT INTO guild_settings (guild_id, admin_role_ids)
@@ -1965,9 +772,8 @@ async def set_admin_roles(guild_id: str, role_ids: List[str]):
             DO UPDATE SET admin_role_ids = $2
         ''', guild_id, role_ids)
 
-
 async def get_admin_roles(guild_id: str) -> List[str]:
-    """Get admin roles"""
+    """Get admin roles for a guild"""
     async with pool.acquire() as conn:
         result = await conn.fetchval(
             'SELECT admin_role_ids FROM guild_settings WHERE guild_id = $1',
@@ -1975,30 +781,26 @@ async def get_admin_roles(guild_id: str) -> List[str]:
         )
         return result if result is not None else []
 
-
 async def add_admin_role(guild_id: str, role_id: str):
-    """Add admin role"""
+    """Add a single admin role to a guild"""
     current_roles = await get_admin_roles(guild_id)
     if role_id not in current_roles:
         current_roles.append(role_id)
         await set_admin_roles(guild_id, current_roles)
 
-
 async def remove_admin_role(guild_id: str, role_id: str):
-    """Remove admin role"""
+    """Remove a single admin role from a guild"""
     current_roles = await get_admin_roles(guild_id)
     if role_id in current_roles:
         current_roles.remove(role_id)
         await set_admin_roles(guild_id, current_roles)
 
-
 async def clear_admin_roles(guild_id: str):
-    """Clear admin roles"""
+    """Clear all admin roles for a guild"""
     await set_admin_roles(guild_id, [])
 
-
 async def set_command_post_restriction(guild_id: str, command_name: str, post_id: str = None):
-    """Set command post restriction"""
+    """Set which post a command is restricted to"""
     column_name = f'{command_name}_post_id'
     
     async with pool.acquire() as conn:
@@ -2008,17 +810,15 @@ async def set_command_post_restriction(guild_id: str, command_name: str, post_id
             ON CONFLICT (guild_id) DO NOTHING
         ''', guild_id)
         
-    ALLOWED_COLUMNS = {'create_company_post_id', 'request_loan_post_id'}
-    if column_name not in ALLOWED_COLUMNS:
-        raise ValueError(f"Invalid column name: {column_name}")
-    
-    await conn.execute(query, guild_id, post_id)
-
+        query = f'''
+            UPDATE guild_settings
+            SET {column_name} = $2
+            WHERE guild_id = $1
+        '''
+        await conn.execute(query, guild_id, post_id)
 
 async def get_command_post_restriction(guild_id: str, command_name: str) -> Optional[str]:
-    """Get command post restriction"""
-    if not pool:
-        return None
+    """Get the restricted post ID for a command"""
     column_name = f'{command_name}_post_id'
     
     async with pool.acquire() as conn:
@@ -2027,370 +827,1128 @@ async def get_command_post_restriction(guild_id: str, command_name: str) -> Opti
         return result
 
 
-async def health_check() -> Dict[str, Any]:
-    """Check database health"""
-    if not pool:
-        return {"healthy": False, "error": "Pool not initialized"}
-    try:
-        async with pool.acquire() as conn:
-            start_time = datetime.utcnow()
-            await conn.execute("SELECT 1")
-            end_time = datetime.utcnow()
-            latency = (end_time - start_time).total_seconds() * 1000
-            return {
-                "healthy": True,
-                "latency_ms": latency,
-                "pool_size": pool.get_size(),
-                "pool_min": pool.get_min_size(),
-                "pool_max": pool.get_max_size()
-            }
-    except Exception as e:
-        logger.error(f"Health check failed: {e}")
-        return {"healthy": False, "error": str(e)}
+# ==================== STOCK MARKET DISPLAY ====================
+
+async def set_stock_market_channel(guild_id: str, channel_id: str):
+    """Set the stock market display channel for a guild"""
+    async with pool.acquire() as conn:
+        await conn.execute('''
+            INSERT INTO guild_settings (guild_id, stock_market_channel_id)
+            VALUES ($1, $2)
+            ON CONFLICT (guild_id)
+            DO UPDATE SET stock_market_channel_id = $2
+        ''', guild_id, channel_id)
+
+async def set_stock_market_message(guild_id: str, message_id: str):
+    """Set the stock market display message ID for a guild"""
+    async with pool.acquire() as conn:
+        await conn.execute('''
+            INSERT INTO guild_settings (guild_id, stock_market_message_id)
+            VALUES ($1, $2)
+            ON CONFLICT (guild_id)
+            DO UPDATE SET stock_market_message_id = $2
+        ''', guild_id, message_id)
 
 
-async def cleanup_old_data() -> Dict[str, Any]:
-    """Clean up old logs and expired data"""
-    if not pool:
-        return {"success": False, "error": "Pool not initialized"}
-    
-    results = {}
+# ==================== COLLECTIBLES CATALOG DISPLAY ====================
+
+async def set_collectibles_catalog_channel(guild_id: str, channel_id: str):
+    """Set the collectibles catalog channel for a guild"""
+    async with pool.acquire() as conn:
+        await conn.execute('''
+            INSERT INTO guild_settings (guild_id, collectibles_catalog_channel_id)
+            VALUES ($1, $2)
+            ON CONFLICT (guild_id)
+            DO UPDATE SET collectibles_catalog_channel_id = $2
+        ''', guild_id, channel_id)
+
+async def set_collectibles_catalog_message(guild_id: str, message_id: str):
+    """Set the collectibles catalog message ID for a guild"""
+    async with pool.acquire() as conn:
+        await conn.execute('''
+            INSERT INTO guild_settings (guild_id, collectibles_catalog_message_id)
+            VALUES ($1, $2)
+            ON CONFLICT (guild_id)
+            DO UPDATE SET collectibles_catalog_message_id = $2
+        ''', guild_id, message_id)
+
+
+# ==================== TAX SYSTEM ====================
+
+async def set_tax_rate(guild_id: str, rate: float):
+    """Set tax rate for a guild"""
+    async with pool.acquire() as conn:
+        await conn.execute('''
+            INSERT INTO guild_settings (guild_id, tax_rate)
+            VALUES ($1, $2)
+            ON CONFLICT (guild_id)
+            DO UPDATE SET tax_rate = $2
+        ''', guild_id, rate)
+
+async def get_tax_rate(guild_id: str) -> float:
+    """Get tax rate for a guild"""
+    async with pool.acquire() as conn:
+        result = await conn.fetchval(
+            'SELECT tax_rate FROM guild_settings WHERE guild_id = $1',
+            guild_id
+        )
+        return result if result is not None else 0.0
+
+async def set_tax_notification_channel(guild_id: str, channel_id: str):
+    """Set tax notification channel"""
+    async with pool.acquire() as conn:
+        await conn.execute('''
+            INSERT INTO guild_settings (guild_id, tax_notification_channel_id)
+            VALUES ($1, $2)
+            ON CONFLICT (guild_id)
+            DO UPDATE SET tax_notification_channel_id = $2
+        ''', guild_id, channel_id)
+
+async def get_tax_notification_channel(guild_id: str) -> Optional[str]:
+    """Get tax notification channel"""
+    async with pool.acquire() as conn:
+        return await conn.fetchval(
+            'SELECT tax_notification_channel_id FROM guild_settings WHERE guild_id = $1',
+            guild_id
+        )
+
+async def log_tax_collection(user_id: str, amount: int, guild_id: str):
+    """Log a tax collection"""
+    async with pool.acquire() as conn:
+        await conn.execute('''
+            INSERT INTO tax_collections (user_id, amount, guild_id, collected_at)
+            VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
+        ''', user_id, amount, guild_id)
+
+async def get_last_tax_collection(guild_id: str) -> Optional[Dict]:
+    """Get last tax collection for guild"""
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow('''
+            SELECT SUM(amount) as total_amount, COUNT(*) as players_taxed, 
+                   MAX(collected_at) as collected_at
+            FROM tax_collections
+            WHERE guild_id = $1
+            AND collected_at > CURRENT_TIMESTAMP - INTERVAL '6 hours'
+            GROUP BY guild_id
+        ''', guild_id)
+        return dict(row) if row else None
+
+async def get_tax_history(guild_id: str, limit: int = 10) -> List[Dict]:
+    """Get tax collection history"""
+    async with pool.acquire() as conn:
+        rows = await conn.fetch('''
+            SELECT SUM(amount) as total_amount, COUNT(*) as players_taxed, 
+                   DATE_TRUNC('hour', collected_at) as collected_at
+            FROM tax_collections
+            WHERE guild_id = $1
+            GROUP BY DATE_TRUNC('hour', collected_at)
+            ORDER BY collected_at DESC
+            LIMIT $2
+        ''', guild_id, limit)
+        return [dict(row) for row in rows]
+
+
+# ==================== COLLECTIBLES ====================
+
+async def player_owns_collectible(user_id: str, collectible_id: str) -> bool:
+    """Check if player owns a collectible"""
+    async with pool.acquire() as conn:
+        result = await conn.fetchval('''
+            SELECT COUNT(*) FROM player_collectibles
+            WHERE user_id = $1 AND collectible_id = $2
+        ''', user_id, collectible_id)
+        return result > 0
+
+async def add_collectible_to_player(user_id: str, collectible_id: str):
+    """Add a collectible to player's collection"""
+    async with pool.acquire() as conn:
+        await conn.execute('''
+            INSERT INTO player_collectibles (user_id, collectible_id, acquired_at)
+            VALUES ($1, $2, CURRENT_TIMESTAMP)
+        ''', user_id, collectible_id)
+
+async def remove_collectible_from_player(user_id: str, collectible_id: str):
+    """Remove a collectible from player's collection"""
+    async with pool.acquire() as conn:
+        await conn.execute('''
+            DELETE FROM player_collectibles
+            WHERE user_id = $1 AND collectible_id = $2
+        ''', user_id, collectible_id)
+
+async def get_player_collectibles(user_id: str) -> List[Dict]:
+    """Get all collectibles owned by player"""
+    async with pool.acquire() as conn:
+        rows = await conn.fetch('''
+            SELECT * FROM player_collectibles
+            WHERE user_id = $1
+            ORDER BY acquired_at DESC
+        ''', user_id)
+        return [dict(row) for row in rows]
+
+async def get_collectibles_stats() -> Dict:
+    """Get server-wide collectibles statistics"""
+    async with pool.acquire() as conn:
+        stats = await conn.fetchrow('''
+            SELECT 
+                COUNT(DISTINCT user_id) as total_collectors,
+                COUNT(*) as total_items,
+                (SELECT collectible_id FROM player_collectibles 
+                 GROUP BY collectible_id ORDER BY COUNT(*) DESC LIMIT 1) as most_collected
+            FROM player_collectibles
+        ''')
+        
+        return {
+            'total_collectors': stats['total_collectors'] if stats else 0,
+            'total_items': stats['total_items'] if stats else 0,
+            'most_collected': stats['most_collected'] if stats else None,
+            'total_value': 0
+        }
+
+
+# ==================== STOCK MARKET ====================
+
+async def get_stock_price(symbol: str) -> Optional[int]:
+    """Get current stock price"""
+    async with pool.acquire() as conn:
+        return await conn.fetchval(
+            'SELECT price FROM stock_prices WHERE symbol = $1',
+            symbol
+        )
+
+async def set_stock_price(symbol: str, price: int):
+    """Set/update stock price"""
+    async with pool.acquire() as conn:
+        await conn.execute('''
+            INSERT INTO stock_prices (symbol, price, updated_at)
+            VALUES ($1, $2, CURRENT_TIMESTAMP)
+            ON CONFLICT (symbol)
+            DO UPDATE SET price = $2, updated_at = CURRENT_TIMESTAMP
+        ''', symbol, price)
+
+async def get_all_stock_prices() -> Dict[str, int]:
+    """Get all current stock prices"""
+    async with pool.acquire() as conn:
+        rows = await conn.fetch('SELECT symbol, price FROM stock_prices')
+        return {row['symbol']: row['price'] for row in rows}
+
+async def log_stock_price_change(symbol: str, old_price: int, new_price: int, change_percent: float):
+    """Log stock price change"""
+    async with pool.acquire() as conn:
+        await conn.execute('''
+            INSERT INTO stock_price_history (symbol, old_price, new_price, change_percent, changed_at)
+            VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
+        ''', symbol, old_price, new_price, change_percent)
+
+async def get_stock_price_history(symbol: str, limit: int = 10) -> List[Dict]:
+    """Get stock price history"""
+    async with pool.acquire() as conn:
+        rows = await conn.fetch('''
+            SELECT * FROM stock_price_history
+            WHERE symbol = $1
+            ORDER BY changed_at DESC
+            LIMIT $2
+        ''', symbol, limit)
+        return [dict(row) for row in rows]
+
+async def get_stock_price_history_since(symbol: str, since: datetime) -> List[Dict]:
+    """Get stock price history since a given timestamp, ordered oldest-first (for plotting)"""
+    async with pool.acquire() as conn:
+        rows = await conn.fetch('''
+            SELECT * FROM stock_price_history
+            WHERE symbol = $1 AND changed_at >= $2
+            ORDER BY changed_at ASC
+        ''', symbol, since)
+        return [dict(row) for row in rows]
+
+
+async def add_stock_to_portfolio(user_id: str, symbol: str, shares: int, buy_price: int):
+    """Add stocks to player's portfolio"""
+    async with pool.acquire() as conn:
+        existing = await conn.fetchrow('''
+            SELECT * FROM player_stocks WHERE user_id = $1 AND symbol = $2
+        ''', user_id, symbol)
+        
+        if existing:
+            total_shares = existing['shares'] + shares
+            total_cost = (existing['average_price'] * existing['shares']) + (buy_price * shares)
+            new_avg = total_cost // total_shares
+            
+            await conn.execute('''
+                UPDATE player_stocks
+                SET shares = $3, average_price = $4
+                WHERE user_id = $1 AND symbol = $2
+            ''', user_id, symbol, total_shares, new_avg)
+        else:
+            await conn.execute('''
+                INSERT INTO player_stocks (user_id, symbol, shares, average_price)
+                VALUES ($1, $2, $3, $4)
+            ''', user_id, symbol, shares, buy_price)
+
+async def remove_stock_from_portfolio(user_id: str, symbol: str, shares: int):
+    """Remove stocks from player's portfolio"""
+    async with pool.acquire() as conn:
+        existing = await conn.fetchrow('''
+            SELECT * FROM player_stocks WHERE user_id = $1 AND symbol = $2
+        ''', user_id, symbol)
+        
+        if not existing:
+            return
+        
+        if existing['shares'] <= shares:
+            await conn.execute('''
+                DELETE FROM player_stocks WHERE user_id = $1 AND symbol = $2
+            ''', user_id, symbol)
+        else:
+            await conn.execute('''
+                UPDATE player_stocks
+                SET shares = shares - $3
+                WHERE user_id = $1 AND symbol = $2
+            ''', user_id, symbol, shares)
+
+async def get_player_stock_holdings(user_id: str, symbol: str) -> Optional[Dict]:
+    """Get player's holdings for a specific stock"""
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow('''
+            SELECT * FROM player_stocks WHERE user_id = $1 AND symbol = $2
+        ''', user_id, symbol)
+        return dict(row) if row else None
+
+async def get_player_portfolio(user_id: str) -> List[Dict]:
+    """Get player's entire stock portfolio"""
+    async with pool.acquire() as conn:
+        rows = await conn.fetch('''
+            SELECT * FROM player_stocks WHERE user_id = $1 ORDER BY symbol
+        ''', user_id)
+        return [dict(row) for row in rows]
+
+async def set_stock_market_channel(guild_id: str, channel_id: str):
+    """Set stock market display channel"""
+    async with pool.acquire() as conn:
+        await conn.execute('''
+            INSERT INTO guild_settings (guild_id, stock_market_channel_id)
+            VALUES ($1, $2)
+            ON CONFLICT (guild_id)
+            DO UPDATE SET stock_market_channel_id = $2
+        ''', guild_id, channel_id)
+
+async def get_stock_market_channel(guild_id: str) -> Optional[str]:
+    """Get stock market display channel"""
+    async with pool.acquire() as conn:
+        return await conn.fetchval(
+            'SELECT stock_market_channel_id FROM guild_settings WHERE guild_id = $1',
+            guild_id
+        )
+
+async def set_stock_market_message(guild_id: str, message_id: str):
+    """Set stock market display message"""
+    async with pool.acquire() as conn:
+        await conn.execute('''
+            INSERT INTO guild_settings (guild_id, stock_market_message_id)
+            VALUES ($1, $2)
+            ON CONFLICT (guild_id)
+            DO UPDATE SET stock_market_message_id = $2
+        ''', guild_id, message_id)
+
+async def get_stock_market_message(guild_id: str) -> Optional[str]:
+    """Get stock market display message"""
+    async with pool.acquire() as conn:
+        return await conn.fetchval(
+            'SELECT stock_market_message_id FROM guild_settings WHERE guild_id = $1',
+            guild_id
+        )
+
+async def set_stock_update_interval(guild_id: str, minutes: int):
+    """Set stock update interval"""
+    async with pool.acquire() as conn:
+        await conn.execute('''
+            INSERT INTO guild_settings (guild_id, stock_update_interval_minutes)
+            VALUES ($1, $2)
+            ON CONFLICT (guild_id)
+            DO UPDATE SET stock_update_interval_minutes = $2
+        ''', guild_id, minutes)
+
+async def get_stock_update_interval(guild_id: str) -> int:
+    """Get stock update interval for a guild"""
+    async with pool.acquire() as conn:
+        result = await conn.fetchval(
+            'SELECT stock_update_interval_minutes FROM guild_settings WHERE guild_id = $1',
+            guild_id
+        )
+        return result if result is not None else 3
+
+async def set_stock_market_frozen(guild_id: str, frozen: bool):
+    """Set stock market frozen state"""
+    async with pool.acquire() as conn:
+        await conn.execute('''
+            INSERT INTO guild_settings (guild_id, stock_market_frozen)
+            VALUES ($1, $2)
+            ON CONFLICT (guild_id)
+            DO UPDATE SET stock_market_frozen = $2
+        ''', guild_id, frozen)
+
+async def is_stock_market_frozen(guild_id: str) -> bool:
+    """Check if stock market is frozen"""
+    async with pool.acquire() as conn:
+        result = await conn.fetchval(
+            'SELECT stock_market_frozen FROM guild_settings WHERE guild_id = $1',
+            guild_id
+        )
+        return result if result is not None else False
+
+
+
+# ==================== COMPANY WARS/RAIDS ====================
+
+async def get_last_raid_time(company_id: int) -> Optional[datetime]:
+    """Get last raid time for a company"""
+    async with pool.acquire() as conn:
+        return await conn.fetchval('''
+            SELECT MAX(raided_at) FROM company_raids
+            WHERE attacker_id = $1
+        ''', company_id)
+
+async def log_company_raid(attacker_id: int, defender_id: int, success: bool, loot: int, reputation_loss: int):
+    """Log a company raid"""
+    async with pool.acquire() as conn:
+        await conn.execute('''
+            INSERT INTO company_raids 
+            (attacker_id, defender_id, success, loot, reputation_loss, raided_at)
+            VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)
+        ''', attacker_id, defender_id, success, loot, reputation_loss)
+
+async def create_company_war(attacker_id: int, defender_id: int) -> int:
+    """Create a new company war"""
+    async with pool.acquire() as conn:
+        return await conn.fetchval('''
+            INSERT INTO company_wars 
+            (attacker_id, defender_id, starts_at, ends_at)
+            VALUES ($1, $2, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP + INTERVAL '24 hours')
+            RETURNING id
+        ''', attacker_id, defender_id)
+
+async def get_active_war(company1_id: int, company2_id: int) -> Optional[Dict]:
+    """Check if there's an active war between two companies"""
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow('''
+            SELECT * FROM company_wars
+            WHERE ((attacker_id = $1 AND defender_id = $2) OR (attacker_id = $2 AND defender_id = $1))
+            AND ends_at > CURRENT_TIMESTAMP
+            AND active = TRUE
+        ''', company1_id, company2_id)
+        return dict(row) if row else None
+
+async def get_company_wars(company_id: int) -> List[Dict]:
+    """Get all active wars for a company"""
+    async with pool.acquire() as conn:
+        rows = await conn.fetch('''
+            SELECT * FROM company_wars
+            WHERE (attacker_id = $1 OR defender_id = $1)
+            AND ends_at > CURRENT_TIMESTAMP
+            AND active = TRUE
+            ORDER BY starts_at DESC
+        ''', company_id)
+        return [dict(row) for row in rows]
+
+async def get_war_by_id(war_id: int) -> Optional[Dict]:
+    """Get a war by its ID"""
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow('''
+            SELECT * FROM company_wars WHERE id = $1
+        ''', war_id)
+        return dict(row) if row else None
+
+async def end_company_war(war_id: int, winner_id: Optional[int] = None, force_end: bool = False):
+    """End a company war, optionally specifying a winner or force ending without winner"""
+    async with pool.acquire() as conn:
+        if force_end:
+            # Force end without declaring a winner
+            await conn.execute('''
+                UPDATE company_wars
+                SET active = FALSE, ends_at = CURRENT_TIMESTAMP
+                WHERE id = $1
+            ''', war_id)
+        else:
+            # Normal end with winner
+            await conn.execute('''
+                UPDATE company_wars
+                SET active = FALSE, winner_id = $2, ends_at = CURRENT_TIMESTAMP
+                WHERE id = $1
+            ''', war_id, winner_id)
+
+
+# ==================== CORPORATIONS ====================
+
+async def corporation_name_exists(name: str) -> bool:
+    """Check if corporation name exists"""
+    async with pool.acquire() as conn:
+        result = await conn.fetchval('''
+            SELECT COUNT(*) FROM corporations WHERE LOWER(name) = LOWER($1)
+        ''', name)
+        return result > 0
+
+async def corporation_tag_exists(tag: str) -> bool:
+    """Check if corporation tag exists"""
+    async with pool.acquire() as conn:
+        result = await conn.fetchval('''
+            SELECT COUNT(*) FROM corporations WHERE UPPER(tag) = UPPER($1)
+        ''', tag)
+        return result > 0
+
+async def create_corporation(name: str, tag: str, leader_id: str, guild_id: str) -> int:
+    """Create a new corporation"""
+    async with pool.acquire() as conn:
+        corp_id = await conn.fetchval('''
+            INSERT INTO corporations (name, tag, leader_id, guild_id, created_at)
+            VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
+            RETURNING id
+        ''', name, tag, leader_id, guild_id)
+        
+        await conn.execute('''
+            INSERT INTO corporation_members (corporation_id, user_id, joined_at)
+            VALUES ($1, $2, CURRENT_TIMESTAMP)
+        ''', corp_id, leader_id)
+        
+        return corp_id
+
+async def get_corporation_by_id(corp_id: int) -> Optional[Dict]:
+    """Get corporation by ID"""
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow('''
+            SELECT * FROM corporations WHERE id = $1
+        ''', corp_id)
+        return dict(row) if row else None
+
+async def get_corporation_by_leader(leader_id: str) -> Optional[Dict]:
+    """Get corporation by leader ID"""
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow('''
+            SELECT * FROM corporations WHERE leader_id = $1
+        ''', leader_id)
+        return dict(row) if row else None
+
+async def get_player_corporation(user_id: str) -> Optional[Dict]:
+    """Get the corporation a player belongs to"""
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow('''
+            SELECT c.* FROM corporations c
+            JOIN corporation_members cm ON c.id = cm.corporation_id
+            WHERE cm.user_id = $1
+        ''', user_id)
+        return dict(row) if row else None
+
+async def get_corporation_member_limit(guild_id: str) -> int:
+    """Get corporation member limit for guild"""
+    async with pool.acquire() as conn:
+        result = await conn.fetchval('''
+            SELECT corporation_member_limit FROM guild_settings WHERE guild_id = $1
+        ''', guild_id)
+        return result if result is not None else 5
+
+async def get_corporation_member_count(corp_id: int) -> int:
+    """Get current member count of corporation"""
+    async with pool.acquire() as conn:
+        result = await conn.fetchval('''
+            SELECT COUNT(*) FROM corporation_members WHERE corporation_id = $1
+        ''', corp_id)
+        return result or 0
+
+async def create_corporation_invite(corp_id: int, user_id: str):
+    """Create a corporation invitation"""
+    async with pool.acquire() as conn:
+        await conn.execute('''
+            INSERT INTO corporation_invites (corporation_id, user_id, created_at)
+            VALUES ($1, $2, CURRENT_TIMESTAMP)
+            ON CONFLICT (corporation_id, user_id) DO NOTHING
+        ''', corp_id, user_id)
+
+async def get_pending_corporation_invite(user_id: str) -> Optional[Dict]:
+    """Get pending corporation invite for user"""
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow('''
+            SELECT * FROM corporation_invites
+            WHERE user_id = $1 AND accepted = FALSE
+            ORDER BY created_at DESC
+            LIMIT 1
+        ''', user_id)
+        return dict(row) if row else None
+
+async def accept_corporation_invite(invite_id: int, user_id: str):
+    """Accept a corporation invitation"""
+    async with pool.acquire() as conn:
+        corp_id = await conn.fetchval('''
+            SELECT corporation_id FROM corporation_invites WHERE id = $1
+        ''', invite_id)
+        
+        await conn.execute('''
+            UPDATE corporation_invites SET accepted = TRUE WHERE id = $1
+        ''', invite_id)
+        
+        await conn.execute('''
+            INSERT INTO corporation_members (corporation_id, user_id, joined_at)
+            VALUES ($1, $2, CURRENT_TIMESTAMP)
+        ''', corp_id, user_id)
+
+async def remove_player_from_corporation(user_id: str):
+    """Remove player from their corporation"""
+    async with pool.acquire() as conn:
+        await conn.execute('''
+            DELETE FROM corporation_members WHERE user_id = $1
+        ''', user_id)
+
+async def delete_corporation(corp_id: int):
+    """Delete a corporation and all its members"""
+    async with pool.acquire() as conn:
+        # Delete all members first
+        await conn.execute('DELETE FROM corporation_members WHERE corporation_id = $1', corp_id)
+        # Delete all pending invites
+        await conn.execute('DELETE FROM corporation_invites WHERE corporation_id = $1', corp_id)
+        # Delete the corporation
+        await conn.execute('DELETE FROM corporations WHERE id = $1', corp_id)
+
+async def get_corporation_members(corp_id: int) -> List[Dict]:
+    """Get all members of a corporation with their balances"""
+    async with pool.acquire() as conn:
+        rows = await conn.fetch('''
+            SELECT cm.user_id, p.username, p.balance, cm.joined_at
+            FROM corporation_members cm
+            JOIN players p ON cm.user_id = p.user_id
+            WHERE cm.corporation_id = $1
+            ORDER BY p.balance DESC
+        ''', corp_id)
+        return [dict(row) for row in rows]
+
+async def get_corporation_leaderboard(guild_id: str, limit: int = 25) -> List[Dict]:
+    """Get corporation leaderboard by total member wealth"""
+    async with pool.acquire() as conn:
+        rows = await conn.fetch('''
+            SELECT 
+                c.id,
+                c.name,
+                c.tag,
+                c.leader_id,
+                COUNT(cm.user_id) as member_count,
+                COALESCE(SUM(p.balance), 0) as total_wealth
+            FROM corporations c
+            LEFT JOIN corporation_members cm ON c.id = cm.corporation_id
+            LEFT JOIN players p ON cm.user_id = p.user_id
+            WHERE c.guild_id = $1
+            GROUP BY c.id, c.name, c.tag, c.leader_id
+            ORDER BY total_wealth DESC
+            LIMIT $2
+        ''', guild_id, limit)
+        return [dict(row) for row in rows]
+
+async def set_corporation_member_limit(guild_id: str, limit: int):
+    """Set corporation member limit"""
+    async with pool.acquire() as conn:
+        await conn.execute('''
+            INSERT INTO guild_settings (guild_id, corporation_member_limit)
+            VALUES ($1, $2)
+            ON CONFLICT (guild_id)
+            DO UPDATE SET corporation_member_limit = $2
+        ''', guild_id, limit)
+
+async def set_corporation_leaderboard_channel(guild_id: str, channel_id: str):
+    """Set corporation leaderboard display channel"""
+    async with pool.acquire() as conn:
+        await conn.execute('''
+            INSERT INTO guild_settings (guild_id, corporation_leaderboard_channel_id)
+            VALUES ($1, $2)
+            ON CONFLICT (guild_id)
+            DO UPDATE SET corporation_leaderboard_channel_id = $2
+        ''', guild_id, channel_id)
+
+async def get_corporation_leaderboard_channel(guild_id: str) -> Optional[str]:
+    """Get corporation leaderboard display channel"""
+    async with pool.acquire() as conn:
+        return await conn.fetchval(
+            'SELECT corporation_leaderboard_channel_id FROM guild_settings WHERE guild_id = $1',
+            guild_id
+        )
+
+async def set_corporation_leaderboard_message(guild_id: str, message_id: str):
+    """Set corporation leaderboard display message"""
+    async with pool.acquire() as conn:
+        await conn.execute('''
+            INSERT INTO guild_settings (guild_id, corporation_leaderboard_message_id)
+            VALUES ($1, $2)
+            ON CONFLICT (guild_id)
+            DO UPDATE SET corporation_leaderboard_message_id = $2
+        ''', guild_id, message_id)
+
+async def get_corporation_leaderboard_message(guild_id: str) -> Optional[str]:
+    """Get corporation leaderboard display message"""
+    async with pool.acquire() as conn:
+        return await conn.fetchval(
+            'SELECT corporation_leaderboard_message_id FROM guild_settings WHERE guild_id = $1',
+            guild_id
+        )
+
+# ==================== COMPANY LEADERBOARD ====================
+
+async def get_company_leaderboard(guild_id: str, limit: int = 25) -> List[Dict]:
+    """Get company leaderboard by income for a specific guild"""
+    async with pool.acquire() as conn:
+        # Get all companies in the guild by checking their thread's guild
+        rows = await conn.fetch('''
+            SELECT 
+                c.id,
+                c.name,
+                c.rank,
+                c.current_income,
+                c.owner_id,
+                c.thread_id
+            FROM companies c
+            WHERE c.thread_id IS NOT NULL
+            ORDER BY c.current_income DESC
+            LIMIT $1
+        ''', limit)
+        
+        # Filter by guild (we need to check which threads belong to this guild)
+        # This is done in the calling code since we need bot access
+        return [dict(row) for row in rows]
+
+async def set_company_leaderboard_channel(guild_id: str, channel_id: str):
+    """Set company leaderboard display channel"""
+    async with pool.acquire() as conn:
+        await conn.execute('''
+            INSERT INTO guild_settings (guild_id, company_leaderboard_channel_id)
+            VALUES ($1, $2)
+            ON CONFLICT (guild_id)
+            DO UPDATE SET company_leaderboard_channel_id = $2
+        ''', guild_id, channel_id)
+
+async def get_company_leaderboard_channel(guild_id: str) -> Optional[str]:
+    """Get company leaderboard display channel"""
+    async with pool.acquire() as conn:
+        return await conn.fetchval(
+            'SELECT company_leaderboard_channel_id FROM guild_settings WHERE guild_id = $1',
+            guild_id
+        )
+
+async def set_company_leaderboard_message(guild_id: str, message_id: str):
+    """Set company leaderboard display message"""
+    async with pool.acquire() as conn:
+        await conn.execute('''
+            INSERT INTO guild_settings (guild_id, company_leaderboard_message_id)
+            VALUES ($1, $2)
+            ON CONFLICT (guild_id)
+            DO UPDATE SET company_leaderboard_message_id = $2
+        ''', guild_id, message_id)
+
+async def get_company_leaderboard_message(guild_id: str) -> Optional[str]:
+    """Get company leaderboard display message"""
+    async with pool.acquire() as conn:
+        return await conn.fetchval(
+            'SELECT company_leaderboard_message_id FROM guild_settings WHERE guild_id = $1',
+            guild_id
+        )
+
+# ==================== REGISTRATION SYSTEM ====================
+
+async def set_registration_channel(guild_id: str, channel_id: str):
+    """Set registration channel"""
+    async with pool.acquire() as conn:
+        await conn.execute('''
+            INSERT INTO guild_settings (guild_id, registration_channel_id)
+            VALUES ($1, $2)
+            ON CONFLICT (guild_id)
+            DO UPDATE SET registration_channel_id = $2
+        ''', guild_id, channel_id)
+
+async def get_registration_channel(guild_id: str) -> Optional[str]:
+    """Get registration channel"""
+    async with pool.acquire() as conn:
+        return await conn.fetchval(
+            'SELECT registration_channel_id FROM guild_settings WHERE guild_id = $1',
+            guild_id
+        )
+
+async def set_registration_message(guild_id: str, message_id: str):
+    """Set registration message"""
+    async with pool.acquire() as conn:
+        await conn.execute('''
+            INSERT INTO guild_settings (guild_id, registration_message_id)
+            VALUES ($1, $2)
+            ON CONFLICT (guild_id)
+            DO UPDATE SET registration_message_id = $2
+        ''', guild_id, message_id)
+
+async def get_registration_message(guild_id: str) -> Optional[str]:
+    """Get registration message"""
+    async with pool.acquire() as conn:
+        return await conn.fetchval(
+            'SELECT registration_message_id FROM guild_settings WHERE guild_id = $1',
+            guild_id
+        )
+
+async def set_registration_role(guild_id: str, role_id: str):
+    """Set registration role"""
+    async with pool.acquire() as conn:
+        await conn.execute('''
+            INSERT INTO guild_settings (guild_id, registration_role_id)
+            VALUES ($1, $2)
+            ON CONFLICT (guild_id)
+            DO UPDATE SET registration_role_id = $2
+        ''', guild_id, role_id)
+
+async def get_registration_role(guild_id: str) -> Optional[str]:
+    """Get registration role"""
+    async with pool.acquire() as conn:
+        return await conn.fetchval(
+            'SELECT registration_role_id FROM guild_settings WHERE guild_id = $1',
+            guild_id
+        )
+
+async def get_registration_settings(guild_id: str) -> Optional[Dict]:
+    """Get all registration settings for a guild"""
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow('''
+            SELECT registration_channel_id, registration_message_id, registration_role_id
+            FROM guild_settings WHERE guild_id = $1
+        ''', guild_id)
+        return dict(row) if row else None
+
+
+# ==================== MAX COMPANIES ====================
+
+async def get_max_companies(guild_id: str) -> Optional[int]:
+    """Get max companies per player for a guild. Returns None if not set."""
+    async with pool.acquire() as conn:
+        return await conn.fetchval(
+            'SELECT max_companies FROM guild_settings WHERE guild_id = $1',
+            guild_id
+        )
+
+async def set_max_companies(guild_id: str, max_companies: int):
+    """Set max companies per player for a guild"""
+    async with pool.acquire() as conn:
+        await conn.execute('''
+            INSERT INTO guild_settings (guild_id, max_companies)
+            VALUES ($1, $2)
+            ON CONFLICT (guild_id)
+            DO UPDATE SET max_companies = $2
+        ''', guild_id, max_companies)
+
+
+# ==================== MEGA PROJECTS ====================
+
+async def initialize_mega_projects():
+    """Initialize default mega projects if they don't exist"""
+    async with pool.acquire() as conn:
+        # Check if projects already exist
+        count = await conn.fetchval('SELECT COUNT(*) FROM mega_projects')
+        if count > 0:
+            return
+        
+        # Insert default mega projects - costs in billions
+        projects = [
+            ('Global Trade Network', 'Establishes international trade routes for all corporation members', 5000000000, 'income_boost', 15.0),
+            ('Tax Haven Initiative', 'Reduces stock trading taxes for all corporation members', 10000000000, 'tax_reduction', 50.0),
+            ('Advanced R&D Facility', 'Boosts company income generation for all members', 15000000000, 'company_income', 20.0),
+            ('Market Intelligence Center', 'Provides market insights and reduced trading fees', 12000000000, 'trading_bonus', 10.0),
+            ('Corporate University', 'Increases efficiency across all member operations', 20000000000, 'global_efficiency', 12.0),
+        ]
+        
+        await conn.executemany('''
+            INSERT INTO mega_projects (name, description, total_cost, buff_type, buff_value)
+            VALUES ($1, $2, $3, $4, $5)
+        ''', projects)
+
+async def get_all_mega_projects() -> List[Dict]:
+    """Get all available mega projects"""
+    async with pool.acquire() as conn:
+        rows = await conn.fetch('SELECT * FROM mega_projects ORDER BY total_cost')
+        return [dict(row) for row in rows]
+
+async def get_corporation_active_project(corporation_id: int) -> Optional[Dict]:
+    """Get the active mega project for a corporation"""
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow('''
+            SELECT cmp.*, mp.name, mp.description, mp.total_cost, mp.buff_type, mp.buff_value
+            FROM corporation_mega_projects cmp
+            JOIN mega_projects mp ON cmp.mega_project_id = mp.id
+            WHERE cmp.corporation_id = $1
+        ''', corporation_id)
+        return dict(row) if row else None
+
+async def start_mega_project(corporation_id: int, mega_project_id: int):
+    """Start a mega project for a corporation"""
+    async with pool.acquire() as conn:
+        await conn.execute('''
+            INSERT INTO corporation_mega_projects (corporation_id, mega_project_id, current_funding)
+            VALUES ($1, $2, 0)
+        ''', corporation_id, mega_project_id)
+
+async def contribute_to_mega_project(corp_mega_project_id: int, user_id: str, amount: int) -> Dict:
+    """Contribute funds to a corporation's mega project"""
     async with pool.acquire() as conn:
         async with conn.transaction():
-            # Cleanup old company events
-            deleted_events = await conn.execute('''
-                DELETE FROM company_events 
-                WHERE occurred_at < CURRENT_TIMESTAMP - INTERVAL '90 days'
-            ''')
-            results['events_cleaned'] = deleted_events
+            # Update funding
+            new_funding = await conn.fetchval('''
+                UPDATE corporation_mega_projects
+                SET current_funding = current_funding + $1
+                WHERE id = $2
+                RETURNING current_funding
+            ''', amount, corp_mega_project_id)
             
-            # Cleanup expired black market effects
-            deleted_effects = await conn.execute('''
-                DELETE FROM black_market_effects 
-                WHERE expires_at < CURRENT_TIMESTAMP
-            ''')
-            results['effects_cleaned'] = deleted_effects
+            # Record contribution
+            await conn.execute('''
+                INSERT INTO mega_project_contributions (corp_mega_project_id, user_id, amount)
+                VALUES ($1, $2, $3)
+            ''', corp_mega_project_id, user_id, amount)
             
-            # Cleanup completed daily quests older than 30 days
-            deleted_quests = await conn.execute('''
-                DELETE FROM daily_quests 
-                WHERE quest_date < (CURRENT_DATE - INTERVAL '30 days')
-            ''')
-            results['quests_cleaned'] = deleted_quests
+            # Get project details
+            project = await conn.fetchrow('''
+                SELECT cmp.*, mp.total_cost, mp.name, mp.buff_type, mp.buff_value
+                FROM corporation_mega_projects cmp
+                JOIN mega_projects mp ON cmp.mega_project_id = mp.id
+                WHERE cmp.id = $1
+            ''', corp_mega_project_id)
             
-    return {"success": True, "results": results}
+            # Check if completed
+            if new_funding >= project['total_cost'] and not project['completed']:
+                await conn.execute('''
+                    UPDATE corporation_mega_projects
+                    SET completed = TRUE, completed_at = CURRENT_TIMESTAMP
+                    WHERE id = $1
+                ''', corp_mega_project_id)
+            
+            return dict(project)
+
+async def get_project_contributions(corp_mega_project_id: int) -> List[Dict]:
+    """Get all contributions to a mega project"""
+    async with pool.acquire() as conn:
+        rows = await conn.fetch('''
+            SELECT user_id, SUM(amount) as total_contributed
+            FROM mega_project_contributions
+            WHERE corp_mega_project_id = $1
+            GROUP BY user_id
+            ORDER BY total_contributed DESC
+        ''', corp_mega_project_id)
+        return [dict(row) for row in rows]
+
+async def get_corporation_project_buff(corporation_id: int) -> Optional[Dict]:
+    """Get active buff from completed mega project"""
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow('''
+            SELECT mp.buff_type, mp.buff_value, mp.name
+            FROM corporation_mega_projects cmp
+            JOIN mega_projects mp ON cmp.mega_project_id = mp.id
+            WHERE cmp.corporation_id = $1 AND cmp.completed = TRUE
+        ''', corporation_id)
+        return dict(row) if row else None
+
+# ==================== CORPORATION FORUM ====================
+
+async def set_corporation_forum_channel(guild_id: str, channel_id: str):
+    """Set corporation forum channel"""
+    async with pool.acquire() as conn:
+        await conn.execute('''
+            INSERT INTO guild_settings (guild_id, corporation_forum_channel_id)
+            VALUES ($1, $2)
+            ON CONFLICT (guild_id)
+            DO UPDATE SET corporation_forum_channel_id = $2
+        ''', guild_id, channel_id)
+
+async def get_corporation_forum_channel(guild_id: str) -> Optional[str]:
+    """Get corporation forum channel"""
+    async with pool.acquire() as conn:
+        return await conn.fetchval(
+            'SELECT corporation_forum_channel_id FROM guild_settings WHERE guild_id = $1',
+            guild_id
+        )
+
+async def set_corporation_forum_post(corp_id: int, post_id: str):
+    """Set the forum post ID for a corporation"""
+    async with pool.acquire() as conn:
+        await conn.execute('''
+            UPDATE corporations
+            SET forum_post_id = $1
+            WHERE id = $2
+        ''', post_id, corp_id)
+
+async def get_corporation_by_forum_post(post_id: str) -> Optional[Dict]:
+    """Get corporation by forum post ID"""
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow('''
+            SELECT * FROM corporations WHERE forum_post_id = $1
+        ''', post_id)
+        return dict(row) if row else None
 
 
-async def reset_server_data(guild_id: str) -> Dict:
-    """Reset all server game data - DANGEROUS!
-    
-    This removes:
-    - All companies
-    - All corporations and members
-    - All corporation wars
-    - All loans
-    - All company raids
-    - All mega projects
-    - All hall of fame records
-    - All server events
-    - All NPC investments
-    - All achievements
-    
-    Returns a dict with counts of deleted items
+# ==================== STOCK TRADING TAX ====================
+
+async def calculate_stock_trade_tax(trade_value: int) -> int:
+    """Calculate progressive stock trading tax based on trade value"""
+    # Progressive tax brackets
+    if trade_value < 500000:
+        return int(trade_value * 0.01)  # 1% for under 500K
+    elif trade_value < 1000000:
+        return int(trade_value * 0.025)  # 2.5% for 500K-1M
+    elif trade_value < 2000000:
+        return int(trade_value * 0.04)  # 4% for 1M-2M
+    elif trade_value < 5000000:
+        return int(trade_value * 0.055)  # 5.5% for 2M-5M
+    elif trade_value < 10000000:
+        return int(trade_value * 0.07)  # 7% for 5M-10M
+    else:
+        return int(trade_value * 0.09)  # 9% for 10M+
+
+async def apply_tax_reduction_buff(user_id: str, base_tax: int) -> int:
+    """Apply corporation tax reduction buff if applicable"""
+    async with pool.acquire() as conn:
+        # Get player's corporation
+        corp = await get_player_corporation(user_id)
+        if not corp:
+            return base_tax
+        
+        # Check for tax reduction buff
+        buff = await get_corporation_project_buff(corp['id'])
+        if buff and buff['buff_type'] == 'tax_reduction':
+            reduction = buff['buff_value'] / 100
+            return int(base_tax * (1 - reduction))
+        
+        return base_tax
+
+# ==================== FROZEN STOCKS (CRASH SYSTEM) ====================
+
+async def freeze_stock(symbol: str, duration_minutes: int = 30):
+    """Freeze a stock that crashed to $0 for a specified duration"""
+    async with pool.acquire() as conn:
+        unfreezes_at = datetime.utcnow() + timedelta(minutes=duration_minutes)
+        await conn.execute('''
+            INSERT INTO frozen_stocks (symbol, frozen_at, unfreezes_at)
+            VALUES ($1, CURRENT_TIMESTAMP, $2)
+            ON CONFLICT (symbol)
+            DO UPDATE SET frozen_at = CURRENT_TIMESTAMP, unfreezes_at = $2
+        ''', symbol, unfreezes_at)
+
+async def is_stock_frozen(symbol: str) -> bool:
+    """Check if a stock is currently frozen"""
+    async with pool.acquire() as conn:
+        result = await conn.fetchval('''
+            SELECT EXISTS(
+                SELECT 1 FROM frozen_stocks
+                WHERE symbol = $1 AND unfreezes_at > CURRENT_TIMESTAMP
+            )
+        ''', symbol)
+        return result
+
+async def get_frozen_stocks() -> List[Dict]:
+    """Get all currently frozen stocks"""
+    async with pool.acquire() as conn:
+        rows = await conn.fetch('''
+            SELECT symbol, frozen_at, unfreezes_at
+            FROM frozen_stocks
+            WHERE unfreezes_at > CURRENT_TIMESTAMP
+            ORDER BY unfreezes_at ASC
+        ''')
+        return [dict(row) for row in rows]
+
+async def get_stocks_ready_to_unfreeze() -> List[str]:
+    """Get stocks that are ready to be unfrozen"""
+    async with pool.acquire() as conn:
+        rows = await conn.fetch('''
+            SELECT symbol FROM frozen_stocks
+            WHERE unfreezes_at <= CURRENT_TIMESTAMP
+        ''')
+        return [row['symbol'] for row in rows]
+
+async def unfreeze_stock(symbol: str):
+    """Unfreeze a stock and remove it from frozen_stocks table"""
+    async with pool.acquire() as conn:
+        await conn.execute('''
+            DELETE FROM frozen_stocks WHERE symbol = $1
+        ''', symbol)
+
+async def clear_all_player_stock_holdings(symbol: str) -> int:
+    """
+    Clear all player holdings for a specific stock (when it crashes to $0).
+    Returns the number of affected players.
     """
     async with pool.acquire() as conn:
-        stats = {}
-        
-        # Count before deleting
-        stats['companies'] = await conn.fetchval(
-            'SELECT COUNT(*) FROM companies WHERE guild_id = $1', guild_id
-        ) or 0
-        
-        stats['corporations'] = await conn.fetchval(
-            'SELECT COUNT(*) FROM corporations WHERE guild_id = $1', guild_id
-        ) or 0
-        
-        stats['wars'] = await conn.fetchval('''
-            SELECT COUNT(*) FROM corporation_wars cw
-            JOIN corporations c ON cw.attacker_corp_id = c.id
-            WHERE c.guild_id = $1
-        ''', guild_id) or 0
-        
-        stats['loans'] = await conn.fetchval(
-            'SELECT COUNT(*) FROM loans WHERE guild_id = $1', guild_id
-        ) or 0
-        
-        stats['raids'] = await conn.fetchval('''
-            SELECT COUNT(*) FROM company_raids cr
-            JOIN companies c ON cr.attacker_company_id = c.id
-            WHERE c.guild_id = $1
-        ''', guild_id) or 0
-        
-        stats['mega_projects'] = await conn.fetchval(
-            'SELECT COUNT(*) FROM mega_projects WHERE guild_id = $1', guild_id
-        ) or 0
-        
-        stats['hall_of_fame'] = await conn.fetchval(
-            'SELECT COUNT(*) FROM hall_of_fame WHERE guild_id = $1', guild_id
-        ) or 0
-        
-        # Delete in correct order (respecting foreign keys)
-        
-        # Delete company-related data first
-        await conn.execute('''
-            DELETE FROM company_raids WHERE attacker_company_id IN (
-                SELECT id FROM companies WHERE guild_id = $1
-            )
-        ''', guild_id)
-        
-        await conn.execute('''
-            DELETE FROM company_assets WHERE company_id IN (
-                SELECT id FROM companies WHERE guild_id = $1
-            )
-        ''', guild_id)
-        
-        await conn.execute('''
-            DELETE FROM espionage_missions WHERE target_company_id IN (
-                SELECT id FROM companies WHERE guild_id = $1
-            )
-        ''', guild_id)
-        
-        # Delete corporation wars
-        await conn.execute('''
-            DELETE FROM corporation_wars WHERE attacker_corp_id IN (
-                SELECT id FROM corporations WHERE guild_id = $1
-            )
-        ''', guild_id)
-        
-        # Delete corporation members
-        await conn.execute('''
-            DELETE FROM corporation_members WHERE corporation_id IN (
-                SELECT id FROM corporations WHERE guild_id = $1
-            )
-        ''', guild_id)
-        
-        # Delete corporations
-        await conn.execute('DELETE FROM corporations WHERE guild_id = $1', guild_id)
-        
-        # Delete companies
-        await conn.execute('DELETE FROM companies WHERE guild_id = $1', guild_id)
-        
-        # Delete loans
-        await conn.execute('DELETE FROM loans WHERE guild_id = $1', guild_id)
-        
-        # Delete mega projects
-        await conn.execute('DELETE FROM mega_projects WHERE guild_id = $1', guild_id)
-        
-        # Delete hall of fame
-        await conn.execute('DELETE FROM hall_of_fame WHERE guild_id = $1', guild_id)
-        await conn.execute('DELETE FROM hall_of_fame_announcements WHERE guild_id = $1', guild_id)
-        
-        # Delete server events
-        await conn.execute('DELETE FROM server_events WHERE guild_id = $1', guild_id)
-        
-        # Delete NPC investments (if table exists)
-        try:
-            await conn.execute('''
-                DELETE FROM npc_investments WHERE player_id IN (
-                    SELECT user_id FROM players WHERE guild_id = $1
-                )
+        result = await conn.execute('''
+            DELETE FROM player_stocks WHERE symbol = $1
+        ''', symbol)
+        # Extract number of rows deleted from result
+        return int(result.split()[-1]) if result else 0
+
+async def get_all_players_with_stock(symbol: str) -> List[Dict]:
+    """Get all players who own shares of a specific stock"""
+    async with pool.acquire() as conn:
+        rows = await conn.fetch('''
+            SELECT user_id, shares, average_price
+            FROM player_stocks
+            WHERE symbol = $1
+        ''', symbol)
+        return [dict(row) for row in rows]
+
+# ==================== ADMIN FUNCTIONS FOR RESET ====================
+
+async def get_all_corporations(guild_id: str = None) -> List[Dict]:
+    """Get all corporations, optionally filtered by guild"""
+    async with pool.acquire() as conn:
+        if guild_id:
+            rows = await conn.fetch('''
+                SELECT * FROM corporations WHERE guild_id = $1
             ''', guild_id)
-        except:
-            pass  # Table might not exist
-        
-        # Delete achievements for guild players (if table exists)
-        try:
-            await conn.execute('''
-                DELETE FROM player_achievements WHERE player_id IN (
-                    SELECT user_id FROM players WHERE guild_id = $1
-                )
-            ''', guild_id)
-        except:
-            pass  # Table might not exist
-        
-        return stats
+        else:
+            rows = await conn.fetch('SELECT * FROM corporations')
+        return [dict(row) for row in rows]
 
+async def get_all_active_wars() -> List[Dict]:
+    """Get all active company wars"""
+    async with pool.acquire() as conn:
+        rows = await conn.fetch('''
+            SELECT * FROM company_wars WHERE active = TRUE
+        ''')
+        return [dict(row) for row in rows]
 
-__all__ = [
-    # Connection
-    'init_database',
-    'close_database',
-    
-    # Players
-    'get_player',
-    'upsert_player',
-    'register_player',
-    'update_player_balance',
-    'set_loan_notifications',
-    'get_player_stats',
-    
-    # Companies
-    'create_company',
-    'get_company_by_id',
-    'get_companies_by_owner',
-    'get_company_by_thread',
-    'set_company_thread',
-    'update_company_income',
-    'set_company_income',
-    'modify_company_income',
-    'update_company_specialization',
-    'delete_company',
-    'get_all_companies',
-    'get_guild_companies_by_rank',
-    
-    # Company Assets
-    'add_company_asset',
-    'get_company_assets',
-    
-    # Company Mergers
-    'merge_companies',
-    'get_player_mergers',
-    
-    # Events
-    'log_company_event',
-    'get_company_events',
-    'get_company_event_history',
-    
-    # Server Events
-    'create_server_event',
-    'get_active_server_events',
-    'end_server_event',
-    
-    # Achievements
-    'grant_achievement',
-    'get_player_achievements',
-    'has_achievement',
-    
-    # Daily Quests
-    'create_daily_quests',
-    'get_daily_quests',
-    'update_quest_progress',
-    'get_quest_progress',
-    
-    # Black Market
-    'log_black_market_purchase',
-    'record_black_market_purchase',
-    'get_black_market_purchases',
-    'add_black_market_effect',
-    'get_black_market_effect',
-    'consume_black_market_effect',
-    
-    # Sabotage
-    'create_sabotage_action',
-    'record_sabotage_operation',
-    'get_ready_sabotage_actions',
-    'execute_sabotage_action',
-    
-    # Espionage
-    'record_espionage_mission',
-    
-    # Company Raids
-    'record_company_raid',
-    'create_company_battle',
-    'resolve_company_battle',
-    'get_recent_raid',
-    'get_company_raid_history',
-    'get_active_company_battles',
-    
-    # Mega Projects
-    'create_mega_project',
-    'get_active_mega_projects',
-    'get_mega_projects_by_rank',
-    'get_completed_mega_projects',
-    
-    # Corporations
-    'create_corporation',
-    'get_corporation',
-    'get_corporation_by_id',
-    'get_corporation_by_name',
-    'get_corporation_by_tag',
-    'get_player_corporation',
-    'add_corporation_member',
-    'remove_corporation_member',
-    'get_corporation_member',
-    'get_corporation_members',
-    'get_corporation_member_count',
-    'add_to_corporation_treasury',
-    'delete_corporation',
-    'get_all_corporations',
-    'get_guild_corporations',
-    'get_corporation_stats',
-    
-    # Corporation Wars
-    'create_corporation_war',
-    'create_corporation_battle',
-    'resolve_corporation_battle',
-    'get_active_corporation_war',
-    'get_active_corporation_wars',
-    
-    # NPC Companies
-    'create_npc_company',
-    'get_npc_company',
-    'get_npc_company_by_id',
-    'get_npc_company_by_key',
-    'get_npc_company_by_name',
-    'get_all_npc_companies',
-    'get_guild_npc_companies',
-    'update_npc_company_value',
-    'update_npc_company_income',
-    
-    # NPC Investments
-    'invest_in_npc_company',
-    'create_npc_investment',
-    'get_player_npc_investment',
-    'get_player_investments',
-    'get_player_npc_investments',
-    'get_all_investments',
-    'update_npc_investment_shares',
-    'delete_npc_investment',
-    'record_dividend_payment',
-    
-    # Hall of Fame
-    'set_hall_of_fame_record',
-    'get_hall_of_fame_record',
-    'get_guild_hall_of_fame',
-    'record_hall_of_fame_announcement',
-    'set_hall_of_fame_channel',
-    
-    # Loans
-    'create_loan',
-    'get_player_loans',
-    'get_loan_by_id',
-    'pay_loan',
-    'get_overdue_loans',
-    'set_loan_thread',
-    
-    # Leaderboard
-    'get_top_players',
-    'get_total_player_count',
-    
-    # Guild Settings
-    'get_guild_settings',
-    'set_company_forum',
-    'set_bank_forum',
-    'set_leaderboard_channel',
-    'upsert_guild_leaderboard',
-    'set_announcements_channel',
-    'set_achievements_channel',
-    'set_npc_companies_channel',
-    'set_bankruptcy_channel',
-    'set_registration_settings',
-    'set_daily_quest_message',
-    'set_event_frequency',
-    'get_event_frequency',
-    'set_sabotage_catch_chance',
-    'get_sabotage_catch_chance',
-    'set_specialization_cooldown',
-    'get_specialization_cooldown',
-    'set_admin_roles',
-    'get_admin_roles',
-    'add_admin_role',
-    'remove_admin_role',
-    'clear_admin_roles',
-    'set_command_post_restriction',
-    'get_command_post_restriction',
-    'health_check',
-    'reset_server_data',
-]
+async def delete_all_corporations(guild_id: str = None):
+    """Delete all corporations and their data, optionally filtered by guild"""
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            if guild_id:
+                # Get corporation IDs for this guild
+                corp_ids = await conn.fetch('SELECT id FROM corporations WHERE guild_id = $1', guild_id)
+                corp_id_list = [row['id'] for row in corp_ids]
+                
+                if corp_id_list:
+                    # Delete mega project contributions
+                    await conn.execute('''
+                        DELETE FROM mega_project_contributions
+                        WHERE corp_mega_project_id IN (
+                            SELECT id FROM corporation_mega_projects WHERE corporation_id = ANY($1)
+                        )
+                    ''', corp_id_list)
+                    
+                    # Delete mega projects
+                    await conn.execute('''
+                        DELETE FROM corporation_mega_projects WHERE corporation_id = ANY($1)
+                    ''', corp_id_list)
+                    
+                    # Delete members
+                    await conn.execute('DELETE FROM corporation_members WHERE corporation_id = ANY($1)', corp_id_list)
+                    
+                    # Delete invites
+                    await conn.execute('DELETE FROM corporation_invites WHERE corporation_id = ANY($1)', corp_id_list)
+                    
+                    # Delete corporations
+                    await conn.execute('DELETE FROM corporations WHERE guild_id = $1', guild_id)
+            else:
+                # Delete all
+                await conn.execute('DELETE FROM mega_project_contributions')
+                await conn.execute('DELETE FROM corporation_mega_projects')
+                await conn.execute('DELETE FROM corporation_members')
+                await conn.execute('DELETE FROM corporation_invites')
+                await conn.execute('DELETE FROM corporations')
 
-logger.info(f"✅ Database module loaded - {len(__all__)} functions available")
+async def end_all_wars():
+    """Force end all active company wars without declaring winners"""
+    async with pool.acquire() as conn:
+        await conn.execute('''
+            UPDATE company_wars
+            SET active = FALSE
+            WHERE active = TRUE
+        ''')
