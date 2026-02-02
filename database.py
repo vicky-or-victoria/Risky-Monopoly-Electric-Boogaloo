@@ -290,6 +290,7 @@ async def init_database():
                     tag VARCHAR(5) NOT NULL,
                     leader_id VARCHAR(255) NOT NULL REFERENCES players(user_id) ON DELETE CASCADE,
                     guild_id VARCHAR(255) NOT NULL,
+                    forum_post_id VARCHAR(255),
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE(name),
                     UNIQUE(tag)
@@ -389,6 +390,7 @@ async def init_database():
                 "ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS company_leaderboard_channel_id VARCHAR(255)",
                 "ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS company_leaderboard_message_id VARCHAR(255)",
                 "ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS corporation_forum_channel_id VARCHAR(255)",
+                "ALTER TABLE corporations ADD COLUMN IF NOT EXISTS forum_post_id VARCHAR(255)",
             ]
             for migration in migrations:
                 await conn.execute(migration)
@@ -1720,6 +1722,24 @@ async def get_corporation_forum_channel(guild_id: str) -> Optional[str]:
             guild_id
         )
 
+async def set_corporation_forum_post(corp_id: int, post_id: str):
+    """Set the forum post ID for a corporation"""
+    async with pool.acquire() as conn:
+        await conn.execute('''
+            UPDATE corporations
+            SET forum_post_id = $1
+            WHERE id = $2
+        ''', post_id, corp_id)
+
+async def get_corporation_by_forum_post(post_id: str) -> Optional[Dict]:
+    """Get corporation by forum post ID"""
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow('''
+            SELECT * FROM corporations WHERE forum_post_id = $1
+        ''', post_id)
+        return dict(row) if row else None
+
+
 # ==================== STOCK TRADING TAX ====================
 
 async def calculate_stock_trade_tax(trade_value: int) -> int:
@@ -1753,4 +1773,3 @@ async def apply_tax_reduction_buff(user_id: str, base_tax: int) -> int:
             return int(base_tax * (1 - reduction))
         
         return base_tax
-
