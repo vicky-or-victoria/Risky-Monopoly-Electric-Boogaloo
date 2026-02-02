@@ -59,6 +59,23 @@ class Corporations(commands.Cog):
             )
             return
         
+        # Get forum channel
+        forum_channel_id = await db.get_corporation_forum_channel(str(interaction.guild.id))
+        if not forum_channel_id:
+            await interaction.followup.send(
+                "❌ Corporation forum has not been set up yet! Ask an admin to use `/setup-corporation-forum` first.",
+                ephemeral=True
+            )
+            return
+        
+        forum_channel = interaction.guild.get_channel(int(forum_channel_id))
+        if not forum_channel or not isinstance(forum_channel, discord.ForumChannel):
+            await interaction.followup.send(
+                "❌ Corporation forum channel is invalid! Ask an admin to set it up again.",
+                ephemeral=True
+            )
+            return
+        
         # Create corporation
         await db.update_player_balance(str(interaction.user.id), -creation_cost)
         corp_id = await db.create_corporation(
@@ -68,6 +85,63 @@ class Corporations(commands.Cog):
             str(interaction.guild.id)
         )
         
+        # Create forum post for the corporation
+        try:
+            forum_embed = discord.Embed(
+                title=f"🏢 [{tag.upper()}] {name}",
+                description=f"**Corporation Hub**\n\nWelcome to the official forum for **{name}**!",
+                color=discord.Color.gold()
+            )
+            forum_embed.add_field(name="👑 Leader", value=interaction.user.mention, inline=True)
+            forum_embed.add_field(name="🆔 Corporation ID", value=f"#{corp_id}", inline=True)
+            forum_embed.add_field(name="👥 Members", value="1", inline=True)
+            forum_embed.add_field(
+                name="📋 Available Commands",
+                value=(
+                    "• `/view-mega-projects` - View and select mega projects\n"
+                    "• `/contribute-to-project` - Contribute to active project\n"
+                    "• `/corporation-info` - View corporation details"
+                ),
+                inline=False
+            )
+            forum_embed.set_footer(text=f"Created on {discord.utils.format_dt(discord.utils.utcnow(), 'F')}")
+            
+            # Create the forum post
+            forum_post = await forum_channel.create_thread(
+                name=f"[{tag.upper()}] {name}",
+                embed=forum_embed,
+                reason=f"Corporation forum created by {interaction.user.name}"
+            )
+            
+            # Store the forum post ID
+            await db.set_corporation_forum_post(corp_id, str(forum_post.id))
+            
+            # Send a welcome message in the forum post
+            welcome_msg = await forum_post.send(
+                f"🎉 Welcome {interaction.user.mention}! This is your corporation's private forum.\n\n"
+                f"**Only members of [{tag.upper()}] {name} can post here.**\n"
+                f"Use this space to coordinate with your corporation members!"
+            )
+            
+        except discord.Forbidden:
+            # Rollback corporation creation if forum post fails
+            await db.disband_corporation(corp_id)
+            await db.update_player_balance(str(interaction.user.id), creation_cost)
+            await interaction.followup.send(
+                "❌ I don't have permission to create forum posts! Ask an admin to grant me the necessary permissions.",
+                ephemeral=True
+            )
+            return
+        except Exception as e:
+            # Rollback corporation creation if forum post fails
+            await db.disband_corporation(corp_id)
+            await db.update_player_balance(str(interaction.user.id), creation_cost)
+            await interaction.followup.send(
+                f"❌ Error creating corporation forum post: {e}",
+                ephemeral=True
+            )
+            return
+        
         embed = discord.Embed(
             title="🏢 Corporation Created!",
             description=f"**[{tag.upper()}] {name}** has been established!",
@@ -76,10 +150,12 @@ class Corporations(commands.Cog):
         embed.add_field(name="👑 Leader", value=interaction.user.mention, inline=True)
         embed.add_field(name="🆔 Corporation ID", value=f"#{corp_id}", inline=True)
         embed.add_field(name="💰 Cost", value=f"${creation_cost:,}", inline=True)
+        embed.add_field(name="📍 Forum", value=f"Your corporation forum: {forum_post.mention}", inline=False)
         embed.add_field(
             name="📋 Next Steps",
             value=(
                 "• Use `/invite-to-corporation` to invite members\n"
+                "• Visit your forum to view and manage mega projects\n"
                 "• Build up your corporation's wealth\n"
                 "• Compete on the corporation leaderboard!"
             ),
