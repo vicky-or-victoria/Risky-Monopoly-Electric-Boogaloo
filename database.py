@@ -1634,32 +1634,56 @@ async def set_max_companies(guild_id: str, max_companies: int):
 # ==================== MEGA PROJECTS ====================
 
 async def initialize_mega_projects():
-    """Initialize default mega projects if they don't exist"""
+    """Initialize default mega projects if they don't exist, or update costs if they do"""
     async with pool.acquire() as conn:
-        # Check if projects already exist
-        count = await conn.fetchval('SELECT COUNT(*) FROM mega_projects')
-        if count > 0:
-            return
+        # Define mega projects with billion-dollar costs
+        projects = {
+            'Global Trade Network': ('Establishes international trade routes for all corporation members', 5000000000, 'income_boost', 15.0),
+            'Tax Haven Initiative': ('Reduces stock trading taxes for all corporation members', 10000000000, 'tax_reduction', 50.0),
+            'Advanced R&D Facility': ('Boosts company income generation for all members', 15000000000, 'company_income', 20.0),
+            'Market Intelligence Center': ('Provides market insights and reduced trading fees', 12000000000, 'trading_bonus', 10.0),
+            'Corporate University': ('Increases efficiency across all member operations', 20000000000, 'global_efficiency', 12.0),
+        }
         
-        # Insert default mega projects - costs in billions
-        projects = [
-            ('Global Trade Network', 'Establishes international trade routes for all corporation members', 5000000000, 'income_boost', 15.0),
-            ('Tax Haven Initiative', 'Reduces stock trading taxes for all corporation members', 10000000000, 'tax_reduction', 50.0),
-            ('Advanced R&D Facility', 'Boosts company income generation for all members', 15000000000, 'company_income', 20.0),
-            ('Market Intelligence Center', 'Provides market insights and reduced trading fees', 12000000000, 'trading_bonus', 10.0),
-            ('Corporate University', 'Increases efficiency across all member operations', 20000000000, 'global_efficiency', 12.0),
-        ]
-        
-        await conn.executemany('''
-            INSERT INTO mega_projects (name, description, total_cost, buff_type, buff_value)
-            VALUES ($1, $2, $3, $4, $5)
-        ''', projects)
+        for name, (description, cost, buff_type, buff_value) in projects.items():
+            # Upsert - insert if not exists, update cost if exists
+            await conn.execute('''
+                INSERT INTO mega_projects (name, description, total_cost, buff_type, buff_value)
+                VALUES ($1, $2, $3, $4, $5)
+                ON CONFLICT (name)
+                DO UPDATE SET 
+                    description = EXCLUDED.description,
+                    total_cost = EXCLUDED.total_cost,
+                    buff_type = EXCLUDED.buff_type,
+                    buff_value = EXCLUDED.buff_value
+            ''', name, description, cost, buff_type, buff_value)
 
 async def get_all_mega_projects() -> List[Dict]:
     """Get all available mega projects"""
     async with pool.acquire() as conn:
         rows = await conn.fetch('SELECT * FROM mega_projects ORDER BY total_cost')
         return [dict(row) for row in rows]
+
+async def update_mega_project_costs_to_billions():
+    """Manual function to update all mega project costs to billions"""
+    async with pool.acquire() as conn:
+        updates = [
+            ('Global Trade Network', 5000000000),
+            ('Tax Haven Initiative', 10000000000),
+            ('Advanced R&D Facility', 15000000000),
+            ('Market Intelligence Center', 12000000000),
+            ('Corporate University', 20000000000),
+        ]
+        
+        for name, cost in updates:
+            await conn.execute('''
+                UPDATE mega_projects
+                SET total_cost = $2
+                WHERE name = $1
+            ''', name, cost)
+        
+        print("✅ Updated all mega project costs to billions!")
+
 
 async def get_corporation_active_project(corporation_id: int) -> Optional[Dict]:
     """Get the active mega project for a corporation"""
