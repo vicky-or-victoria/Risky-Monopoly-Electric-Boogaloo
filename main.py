@@ -220,11 +220,12 @@ class RiskyMonopolyBot(commands.Bot):
         print('✅ Bot is ready!')
     
     async def on_message(self, message):
-        """Handle messages - delete non-owner messages in company threads"""
+        """Handle messages - delete non-owner messages in company threads and non-member messages in corporation forums"""
         if message.author.bot:
             return
         
         if isinstance(message.channel, discord.Thread):
+            # Check if this is a company thread
             company = await db.get_company_by_thread(str(message.channel.id))
             
             if company:
@@ -234,6 +235,30 @@ class RiskyMonopolyBot(commands.Bot):
                         try:
                             await message.channel.send(
                                 f"⚠️ {message.author.mention}, only the company owner can post in this thread.",
+                                delete_after=5
+                            )
+                        except:
+                            pass
+                    except discord.errors.NotFound:
+                        pass
+                    except Exception as e:
+                        print(f"Error deleting message: {e}")
+                    return
+            
+            # Check if this is a corporation forum post
+            corporation = await db.get_corporation_by_forum_post(str(message.channel.id))
+            
+            if corporation:
+                # Check if user is a member of this corporation
+                user_corp = await db.get_player_corporation(str(message.author.id))
+                
+                # Allow only corporation members to post
+                if not user_corp or user_corp['id'] != corporation['id']:
+                    try:
+                        await message.delete()
+                        try:
+                            await message.channel.send(
+                                f"⚠️ {message.author.mention}, only members of **[{corporation['tag']}] {corporation['name']}** can post in this forum.",
                                 delete_after=5
                             )
                         except:
