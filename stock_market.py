@@ -121,6 +121,39 @@ STOCK_COMPANIES = {
 async def update_stock_prices(bot: 'commands.Bot'):
     """Update all stock prices with random fluctuations"""
     try:
+        # First, check for stocks ready to unfreeze
+        stocks_to_unfreeze = await db.get_stocks_ready_to_unfreeze()
+        for symbol in stocks_to_unfreeze:
+            # Reset to random value between 100-500
+            new_price = random.randint(100, 500)
+            await db.set_stock_price(symbol, new_price)
+            await db.unfreeze_stock(symbol)
+            print(f"🔓 {symbol} unfrozen and reset to ${new_price}")
+            
+            # Notify all guilds about the unfreeze
+            for guild in bot.guilds:
+                try:
+                    stock_channel_id = await db.get_stock_market_channel(str(guild.id))
+                    if stock_channel_id:
+                        channel = bot.get_channel(int(stock_channel_id))
+                        if not channel:
+                            channel = await bot.fetch_channel(int(stock_channel_id))
+                        
+                        if channel:
+                            data = STOCK_COMPANIES[symbol]
+                            embed = discord.Embed(
+                                title=f"🔓 {data['emoji']} Stock Unfrozen!",
+                                description=f"**{data['name']} ({symbol})** has been unfrozen and is now trading again!",
+                                color=discord.Color.green()
+                            )
+                            embed.add_field(name="💰 New Price", value=f"${new_price:,}", inline=True)
+                            embed.add_field(name="📈 Status", value="Trading Active", inline=True)
+                            embed.set_footer(text="The stock has reset to a new starting price")
+                            embed.timestamp = discord.utils.utcnow()
+                            await channel.send(embed=embed)
+                except Exception as e:
+                    print(f"Error notifying guild {guild.id} about unfreeze: {e}")
+        
         current_prices = await db.get_all_stock_prices()
 
         # Initialize prices if not set
@@ -131,13 +164,96 @@ async def update_stock_prices(bot: 'commands.Bot'):
 
         # Update each stock
         updates = []
+        crashed_stocks = []
+        
         for symbol, data in STOCK_COMPANIES.items():
+            # Skip frozen stocks
+            if await db.is_stock_frozen(symbol):
+                continue
+                
             current_price = current_prices.get(symbol, data['initial_price'])
 
             change_percent = random.uniform(-data['volatility'], data['volatility'])
             price_change = int(current_price * change_percent)
-            new_price = max(50, current_price + price_change)  # Minimum $50
+            new_price = max(0, current_price + price_change)  # Allow dropping to $0
 
+            # Handle stock crash to $0
+            if new_price == 0:
+                crashed_stocks.append(symbol)
+                
+                # Get all affected players before clearing
+                affected_players = await db.get_all_players_with_stock(symbol)
+                
+                # Clear all player holdings
+                players_affected = await db.clear_all_player_stock_holdings(symbol)
+                
+                # Freeze the stock for 30 minutes
+                await db.freeze_stock(symbol, duration_minutes=30)
+                
+                print(f"💥 {symbol} CRASHED to $0! {players_affected} player(s) lost their shares. Frozen for 30 minutes.")
+                
+                # Notify affected players
+                for player_data in affected_players:
+                    try:
+                        user = bot.get_user(int(player_data['user_id']))
+                        if not user:
+                            user = await bot.fetch_user(int(player_data['user_id']))
+                        
+                        if user:
+                            loss_value = player_data['shares'] * player_data['average_price']
+                            crash_embed = discord.Embed(
+                                title="💥 STOCK MARKET CRASH!",
+                                description=f"**{data['name']} ({symbol})** has crashed to $0!",
+                                color=discord.Color.dark_red()
+                            )
+                            crash_embed.add_field(
+                                name="📉 Your Loss",
+                                value=f"Lost **{player_data['shares']:,} shares** worth approximately **${loss_value:,}**",
+                                inline=False
+                            )
+                            crash_embed.add_field(
+                                name="🔒 Stock Status",
+                                value="The stock is now frozen for 30 minutes and will reset to a random value between $100-$500",
+                                inline=False
+                            )
+                            crash_embed.set_footer(text="All your shares in this stock have been liquidated")
+                            crash_embed.timestamp = discord.utils.utcnow()
+                            
+                            await user.send(embed=crash_embed)
+                    except Exception as e:
+                        print(f"Error notifying user {player_data['user_id']} about crash: {e}")
+                
+                # Notify all guilds about the crash
+                for guild in bot.guilds:
+                    try:
+                        stock_channel_id = await db.get_stock_market_channel(str(guild.id))
+                        if stock_channel_id:
+                            channel = bot.get_channel(int(stock_channel_id))
+                            if not channel:
+                                channel = await bot.fetch_channel(int(stock_channel_id))
+                            
+                            if channel:
+                                crash_embed = discord.Embed(
+                                    title=f"💥 {data['emoji']} STOCK MARKET CRASH!",
+                                    description=f"**{data['name']} ({symbol})** has crashed to **$0**!",
+                                    color=discord.Color.dark_red()
+                                )
+                                crash_embed.add_field(
+                                    name="📊 Impact",
+                                    value=f"All shareholders have lost their positions\n{players_affected} investor(s) affected",
+                                    inline=True
+                                )
+                                crash_embed.add_field(
+                                    name="🔒 Status",
+                                    value=f"Stock frozen for 30 minutes\nWill reset to $100-$500",
+                                    inline=True
+                                )
+                                crash_embed.set_footer(text="This is a rare market event")
+                                crash_embed.timestamp = discord.utils.utcnow()
+                                await channel.send(embed=crash_embed)
+                    except Exception as e:
+                        print(f"Error notifying guild {guild.id} about crash: {e}")
+            
             await db.set_stock_price(symbol, new_price)
             await db.log_stock_price_change(symbol, current_price, new_price, change_percent * 100)
 
@@ -146,7 +262,8 @@ async def update_stock_prices(bot: 'commands.Bot'):
                 'old_price': current_price,
                 'new_price': new_price,
                 'change': price_change,
-                'change_percent': change_percent * 100
+                'change_percent': change_percent * 100,
+                'crashed': symbol in crashed_stocks
             })
 
         # Update stock market channels in all guilds
@@ -183,7 +300,7 @@ async def update_stock_prices(bot: 'commands.Bot'):
             except Exception as e:
                 print(f"Error processing stock updates for guild {guild.id}: {e}")
 
-        print(f"📈 Updated {len(updates)} stock prices")
+        print(f"📈 Updated {len(updates)} stock prices ({len(crashed_stocks)} crash(es))")
 
     except Exception as e:
         print(f"Error in update_stock_prices: {e}")
@@ -328,6 +445,7 @@ def create_stock_market_embed(updates: List[Dict] = None, is_frozen: bool = Fals
                 'price':      u['new_price'],
                 'change':     u['change'],
                 'change_pct': u['change_percent'],
+                'crashed':    u.get('crashed', False)
             })
     else:
         # Fallback when no update data is available (e.g. initial setup)
@@ -338,6 +456,7 @@ def create_stock_market_embed(updates: List[Dict] = None, is_frozen: bool = Fals
                 'price':      data['initial_price'],
                 'change':     0,
                 'change_pct': 0.0,
+                'crashed':    False
             })
 
     # ── column widths (dynamic so the table stays tight) ────────────
@@ -357,22 +476,28 @@ def create_stock_market_embed(updates: List[Dict] = None, is_frozen: bool = Fals
 
     # Data rows
     for r in rows:
-        if r['change'] > 0:
-            arrow = "▲"
-            sign  = "+"
-        elif r['change'] < 0:
-            arrow = "▼"
-            sign  = ""   # minus sign already in the formatted number
+        # Check if this stock crashed
+        if r['crashed'] or r['price'] == 0:
+            arrow = "💥"
+            price_str = "CRASHED"
+            change_str = "FROZEN 30min"
         else:
-            arrow = "─"
-            sign  = ""
+            if r['change'] > 0:
+                arrow = "▲"
+                sign  = "+"
+            elif r['change'] < 0:
+                arrow = "▼"
+                sign  = ""   # minus sign already in the formatted number
+            else:
+                arrow = "─"
+                sign  = ""
 
-        price_str = f"${r['price']:,}"
+            price_str = f"${r['price']:,}"
 
-        if r['change'] != 0:
-            change_str = f"{sign}${r['change']:,} ({sign}{r['change_pct']:.1f}%)"
-        else:
-            change_str = "No change"
+            if r['change'] != 0:
+                change_str = f"{sign}${abs(r['change']):,} ({sign}{r['change_pct']:.1f}%)"
+            else:
+                change_str = "No change"
 
         lines.append(
             f"{arrow} {r['symbol']:<{sym_w}}  "
