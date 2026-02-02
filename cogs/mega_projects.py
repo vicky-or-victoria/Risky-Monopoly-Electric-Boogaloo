@@ -117,10 +117,27 @@ class MegaProjects(commands.Cog):
             )
         
         # Verify this is the correct corporation's forum post
-        forum_corp = await db.get_corporation_by_forum_post(str(interaction.channel.id))
-        if not forum_corp or forum_corp['id'] != corp['id']:
+        channel_id = str(interaction.channel.id)
+        forum_corp = await db.get_corporation_by_forum_post(channel_id)
+        
+        # Debug logging
+        print(f"[DEBUG view-mega-projects] User: {interaction.user.id} | Channel: {channel_id}")
+        print(f"[DEBUG view-mega-projects] User's corp: ID={corp['id']}, Name={corp['name']}")
+        print(f"[DEBUG view-mega-projects] Forum corp lookup: {forum_corp}")
+        
+        if not forum_corp:
             return await interaction.response.send_message(
-                "❌ This command can only be used in your own corporation's forum post!",
+                f"❌ This thread is not registered as a corporation forum post!\n"
+                f"If this is your corporation's forum, please contact an admin.\n"
+                f"Debug Info: Channel ID `{channel_id}`",
+                ephemeral=True
+            )
+        
+        if forum_corp['id'] != corp['id']:
+            return await interaction.response.send_message(
+                f"❌ This command can only be used in your own corporation's forum post!\n"
+                f"• This forum belongs to: **{forum_corp['name']}** (ID: {forum_corp['id']})\n"
+                f"• Your corporation is: **{corp['name']}** (ID: {corp['id']})",
                 ephemeral=True
             )
         
@@ -232,10 +249,27 @@ class MegaProjects(commands.Cog):
             )
         
         # Verify this is the correct corporation's forum post
-        forum_corp = await db.get_corporation_by_forum_post(str(interaction.channel.id))
-        if not forum_corp or forum_corp['id'] != corp['id']:
+        channel_id = str(interaction.channel.id)
+        forum_corp = await db.get_corporation_by_forum_post(channel_id)
+        
+        # Debug logging
+        print(f"[DEBUG contribute-to-project] User: {interaction.user.id} | Channel: {channel_id}")
+        print(f"[DEBUG contribute-to-project] User's corp: ID={corp['id']}, Name={corp['name']}")
+        print(f"[DEBUG contribute-to-project] Forum corp lookup: {forum_corp}")
+        
+        if not forum_corp:
             return await interaction.response.send_message(
-                "❌ This command can only be used in your own corporation's forum post!",
+                f"❌ This thread is not registered as a corporation forum post!\n"
+                f"If this is your corporation's forum, please contact an admin.\n"
+                f"Debug Info: Channel ID `{channel_id}`",
+                ephemeral=True
+            )
+        
+        if forum_corp['id'] != corp['id']:
+            return await interaction.response.send_message(
+                f"❌ This command can only be used in your own corporation's forum post!\n"
+                f"• This forum belongs to: **{forum_corp['name']}** (ID: {forum_corp['id']})\n"
+                f"• Your corporation is: **{corp['name']}** (ID: {corp['id']})",
                 ephemeral=True
             )
         
