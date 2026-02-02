@@ -1522,6 +1522,51 @@ class AdminCommands(commands.Cog):
         except:
             pass
 
+    @app_commands.command(name="update-mega-project-costs", description="[ADMIN] Update mega project costs to billions")
+    async def update_mega_project_costs(self, interaction: discord.Interaction):
+        """Update all mega project costs to billions (Admin/Owner only)"""
+        if not await is_admin_or_authorized(interaction):
+            return await interaction.response.send_message(
+                "❌ You don't have permission to use this command.",
+                ephemeral=True
+            )
+        
+        await interaction.response.defer(ephemeral=True)
+        
+        try:
+            # Update the costs
+            await db.update_mega_project_costs_to_billions()
+            
+            # Get updated projects
+            projects = await db.get_all_mega_projects()
+            
+            embed = discord.Embed(
+                title="✅ Mega Project Costs Updated",
+                description="All mega project costs have been updated to billions!",
+                color=discord.Color.green()
+            )
+            
+            for project in projects:
+                cost_billions = project['total_cost'] / 1_000_000_000
+                embed.add_field(
+                    name=project['name'],
+                    value=f"💰 **${cost_billions:.1f}B**\n{project['buff_type']}: +{project['buff_value']}%",
+                    inline=True
+                )
+            
+            embed.set_footer(text=f"Updated by {interaction.user.name}")
+            embed.timestamp = discord.utils.utcnow()
+            
+            await interaction.followup.send(embed=embed, ephemeral=True)
+        except Exception as e:
+            import traceback
+            error_details = traceback.format_exc()
+            print(f"[ERROR] Failed to update mega project costs: {error_details}")
+            await interaction.followup.send(
+                f"❌ Error updating mega project costs: {e}",
+                ephemeral=True
+            )
+
 
     @app_commands.command(name="check-bot-permissions", description="[ADMIN] Diagnose bot permissions on configured forum channels")
     async def check_bot_permissions(self, interaction: discord.Interaction):
