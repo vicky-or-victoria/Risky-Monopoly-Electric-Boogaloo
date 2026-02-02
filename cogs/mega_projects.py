@@ -52,8 +52,7 @@ class MegaProjectSelectView(discord.ui.View):
         
         if user_id_str != self.leader_id:
             return await interaction.response.send_message(
-                f"❌ Only the corporation leader can select mega projects!\n"
-                f"Debug: Your ID ({user_id_str}) vs Leader ID ({self.leader_id})",
+                f"❌ Only the corporation leader can select mega projects!",
                 ephemeral=True
             )
         
@@ -61,6 +60,9 @@ class MegaProjectSelectView(discord.ui.View):
         
         # Start the project
         try:
+            # Defer the response to prevent timeout
+            await interaction.response.defer()
+            
             await db.start_mega_project(self.corporation_id, project_id)
             
             # Get project details
@@ -68,6 +70,13 @@ class MegaProjectSelectView(discord.ui.View):
             selected_project = next((p for p in projects if p['id'] == project_id), None)
             
             if selected_project:
+                # Display cost in billions for clarity
+                if selected_project['total_cost'] >= 1_000_000_000:
+                    cost_billions = selected_project['total_cost'] / 1_000_000_000
+                    cost_display = f"${cost_billions:.1f}B"
+                else:
+                    cost_display = f"${selected_project['total_cost']:,}"
+                
                 embed = discord.Embed(
                     title="🏗️ Mega Project Started!",
                     description=f"**{selected_project['name']}** has been initiated!",
@@ -80,7 +89,7 @@ class MegaProjectSelectView(discord.ui.View):
                 )
                 embed.add_field(
                     name="💰 Total Cost",
-                    value=f"${selected_project['total_cost']:,}",
+                    value=cost_display,
                     inline=True
                 )
                 embed.add_field(
@@ -90,7 +99,7 @@ class MegaProjectSelectView(discord.ui.View):
                 )
                 embed.add_field(
                     name="📊 Progress",
-                    value="$0 / ${:,} (0%)".format(selected_project['total_cost']),
+                    value=f"$0 / {cost_display} (0%)",
                     inline=False
                 )
                 embed.add_field(
@@ -99,12 +108,31 @@ class MegaProjectSelectView(discord.ui.View):
                     inline=False
                 )
                 
-                await interaction.response.send_message(embed=embed)
+                await interaction.followup.send(embed=embed)
         except Exception as e:
-            await interaction.response.send_message(
-                f"❌ Error starting project: {e}",
-                ephemeral=True
-            )
+            import traceback
+            error_details = traceback.format_exc()
+            print(f"[ERROR] Mega project selection failed: {error_details}")
+            
+            error_message = str(e)
+            if "duplicate key" in error_message.lower() or "unique constraint" in error_message.lower():
+                error_message = "Your corporation already has an active mega project! Complete or cancel it first."
+            
+            try:
+                await interaction.followup.send(
+                    f"❌ Error starting project: {error_message}",
+                    ephemeral=True
+                )
+            except:
+                # If followup fails, try response (in case defer didn't happen)
+                try:
+                    await interaction.response.send_message(
+                        f"❌ Error starting project: {error_message}",
+                        ephemeral=True
+                    )
+                except:
+                    pass
+
 
 
 class MegaProjects(commands.Cog):
