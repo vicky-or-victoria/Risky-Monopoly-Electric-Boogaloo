@@ -5,6 +5,7 @@ from discord import app_commands
 from discord.ext import commands
 from typing import Optional
 import asyncio
+from datetime import datetime
 
 import database as db
 from stock_market import STOCK_COMPANIES, create_stock_market_embed, generate_stock_chart
@@ -241,11 +242,28 @@ class StockSharesModal(discord.ui.Modal, title="Enter Number of Shares"):
         """Process stock purchase"""
         await interaction.response.defer()
 
+        # Check if stock is frozen
+        if await db.is_stock_frozen(self.symbol):
+            frozen_stocks = await db.get_frozen_stocks()
+            frozen_stock = next((s for s in frozen_stocks if s['symbol'] == self.symbol), None)
+            
+            if frozen_stock:
+                time_left = frozen_stock['unfreezes_at'] - datetime.utcnow()
+                minutes_left = int(time_left.total_seconds() / 60)
+                
+                return await interaction.followup.send(
+                    f"🔒 **Stock Frozen!**\n\n"
+                    f"**{self.symbol}** recently crashed to $0 and is temporarily frozen.\n"
+                    f"**Time Remaining:** ~{minutes_left} minutes\n\n"
+                    f"The stock will reset to a random value between $100-$500 when unfrozen.",
+                    ephemeral=True
+                )
+
         player = await db.get_player(str(interaction.user.id))
 
         current_price = await db.get_stock_price(self.symbol)
-        if current_price is None:
-            return await interaction.followup.send("❌ Stock not found.", ephemeral=True)
+        if current_price is None or current_price == 0:
+            return await interaction.followup.send("❌ Stock not available for trading.", ephemeral=True)
 
         total_cost = current_price * shares
 
