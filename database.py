@@ -391,6 +391,7 @@ async def init_database():
                 "ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS stock_market_message_id VARCHAR(255)",
                 "ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS stock_update_interval_minutes INTEGER DEFAULT 3",
                 "ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS stock_market_frozen BOOLEAN DEFAULT FALSE",
+                "ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS income_frozen BOOLEAN DEFAULT FALSE",
                 "ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS corporation_member_limit INTEGER DEFAULT 5",
                 "ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS corporation_leaderboard_channel_id VARCHAR(255)",
                 "ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS corporation_leaderboard_message_id VARCHAR(255)",
@@ -2014,3 +2015,28 @@ async def end_all_wars():
             SET active = FALSE
             WHERE active = TRUE
         ''')
+
+async def set_income_frozen(guild_id: str, frozen: bool):
+    """Set income generation frozen status for a guild"""
+    async with pool.acquire() as conn:
+        await conn.execute('''
+            INSERT INTO guild_settings (guild_id, income_frozen)
+            VALUES ($1, $2)
+            ON CONFLICT (guild_id) DO UPDATE
+            SET income_frozen = $2
+        ''', guild_id, frozen)
+
+async def is_income_frozen(guild_id: str) -> bool:
+    """Check if income generation is frozen for a guild"""
+    async with pool.acquire() as conn:
+        result = await conn.fetchval(
+            'SELECT income_frozen FROM guild_settings WHERE guild_id = $1',
+            guild_id
+        )
+        return result if result is not None else False
+
+async def get_income_frozen_guilds() -> list:
+    """Get all guilds with frozen income"""
+    async with pool.acquire() as conn:
+        rows = await conn.fetch('SELECT guild_id FROM guild_settings WHERE income_frozen = TRUE')
+        return [row['guild_id'] for row in rows]
