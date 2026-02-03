@@ -43,6 +43,13 @@ class MegaProjectSelectView(discord.ui.View):
         select.callback = self.select_callback
         self.add_item(select)
     
+    def _create_progress_bar(self, progress_pct: float, length: int = 20) -> str:
+        """Create a visual progress bar"""
+        filled = int((progress_pct / 100) * length)
+        empty = length - filled
+        bar = "█" * filled + "░" * empty
+        return f"[{bar}]"
+    
     async def select_callback(self, interaction: discord.Interaction):
         """Handle project selection"""
         user_id_str = str(interaction.user.id)
