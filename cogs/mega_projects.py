@@ -52,13 +52,16 @@ class MegaProjectSelectView(discord.ui.View):
     
     async def select_callback(self, interaction: discord.Interaction):
         """Handle project selection"""
+        # Defer immediately to prevent timeout
+        await interaction.response.defer()
+        
         user_id_str = str(interaction.user.id)
         
         # Debug logging
         print(f"[DEBUG select_callback] User ID: {user_id_str}, Leader ID: {self.leader_id}, Match: {user_id_str == self.leader_id}")
         
         if user_id_str != self.leader_id:
-            return await interaction.response.send_message(
+            return await interaction.followup.send(
                 f"❌ Only the corporation leader can select mega projects!",
                 ephemeral=True
             )
@@ -67,9 +70,6 @@ class MegaProjectSelectView(discord.ui.View):
         
         # Start the project
         try:
-            # Defer the response to prevent timeout
-            await interaction.response.defer()
-            
             await db.start_mega_project(self.corporation_id, project_id)
             
             # Get project details
@@ -140,27 +140,10 @@ class MegaProjectSelectView(discord.ui.View):
             if "duplicate key" in error_message.lower() or "unique constraint" in error_message.lower():
                 error_message = "Your corporation already has an active mega project! Complete or cancel it first."
             
-            try:
-                await interaction.followup.send(
-                    f"❌ Error starting project: {error_message}",
-                    ephemeral=True
-                )
-            except:
-                # If followup fails, try response (in case defer didn't happen)
-                try:
-                    await interaction.response.send_message(
-                        f"❌ Error starting project: {error_message}",
-                        ephemeral=True
-                    )
-                except:
-                    pass
-    
-    def _create_progress_bar(self, progress_pct: float, length: int = 20) -> str:
-        """Create a visual progress bar"""
-        filled = int((progress_pct / 100) * length)
-        empty = length - filled
-        bar = "█" * filled + "░" * empty
-        return f"[{bar}]"
+            await interaction.followup.send(
+                f"❌ Error starting project: {error_message}",
+                ephemeral=True
+            )
 
 
 
@@ -327,55 +310,42 @@ class MegaProjects(commands.Cog):
         channel_id = str(interaction.channel.id)
         forum_corp = await db.get_corporation_by_forum_post(channel_id)
         
-        # Debug logging
-        print(f"[DEBUG contribute-to-project] User: {interaction.user.id} | Channel: {channel_id}")
-        print(f"[DEBUG contribute-to-project] User's corp: ID={corp['id']}, Name={corp['name']}")
-        print(f"[DEBUG contribute-to-project] Forum corp lookup: {forum_corp}")
-        
-        if not forum_corp:
+        if not forum_corp or forum_corp['id'] != corp['id']:
             return await interaction.response.send_message(
-                f"❌ This thread is not registered as a corporation forum post!\n"
-                f"If this is your corporation's forum, please contact an admin.\n"
-                f"Debug Info: Channel ID `{channel_id}`",
+                "❌ This command can only be used in your corporation's forum post!",
                 ephemeral=True
             )
         
-        if forum_corp['id'] != corp['id']:
+        # Check if corporation has an active project
+        active_project = await db.get_corporation_active_project(corp['id'])
+        
+        if not active_project:
             return await interaction.response.send_message(
-                f"❌ This command can only be used in your own corporation's forum post!\n"
-                f"• This forum belongs to: **{forum_corp['name']}** (ID: {forum_corp['id']})\n"
-                f"• Your corporation is: **{corp['name']}** (ID: {corp['id']})",
+                "❌ Your corporation doesn't have an active mega project!\n"
+                "Use `/view-mega-projects` to select one.",
+                ephemeral=True
+            )
+        
+        if active_project['completed']:
+            return await interaction.response.send_message(
+                "❌ This project is already completed!\n"
+                "You can view it with `/view-mega-projects`",
+                ephemeral=True
+            )
+        
+        # Check if player has enough balance
+        player = await db.get_player(str(interaction.user.id))
+        if player['balance'] < amount:
+            return await interaction.response.send_message(
+                f"❌ You don't have enough money!\n"
+                f"Your balance: ${player['balance']:,}\n"
+                f"Amount needed: ${amount:,}",
                 ephemeral=True
             )
         
         await interaction.response.defer()
         
-        # Check if corporation has an active project
-        active_project = await db.get_corporation_active_project(corp['id'])
-        if not active_project:
-            return await interaction.followup.send(
-                "❌ Your corporation doesn't have an active mega project!\n"
-                "Use `/view-mega-projects` to select one (leader only).",
-                ephemeral=True
-            )
-        
-        if active_project['completed']:
-            return await interaction.followup.send(
-                "❌ This mega project is already completed!",
-                ephemeral=True
-            )
-        
-        # Check player balance
-        player = await db.get_player(str(interaction.user.id))
-        if player['balance'] < amount:
-            return await interaction.followup.send(
-                f"❌ Insufficient funds!\n"
-                f"**Required:** ${amount:,}\n"
-                f"**Your Balance:** ${player['balance']:,}",
-                ephemeral=True
-            )
-        
-        # Process contribution
+        # Deduct money from player and contribute to project
         await db.update_player_balance(str(interaction.user.id), -amount)
         updated_project = await db.contribute_to_mega_project(
             active_project['id'],
