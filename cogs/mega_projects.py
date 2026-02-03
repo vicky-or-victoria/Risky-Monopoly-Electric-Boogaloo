@@ -70,6 +70,12 @@ class MegaProjectSelectView(discord.ui.View):
             selected_project = next((p for p in projects if p['id'] == project_id), None)
             
             if selected_project:
+                # Delete the original view-mega-projects message
+                try:
+                    await interaction.message.delete()
+                except:
+                    pass  # If deletion fails, just continue
+                
                 # Display cost in billions for clarity
                 if selected_project['total_cost'] >= 1_000_000_000:
                     cost_billions = selected_project['total_cost'] / 1_000_000_000
@@ -77,15 +83,14 @@ class MegaProjectSelectView(discord.ui.View):
                 else:
                     cost_display = f"${selected_project['total_cost']:,}"
                 
+                # Create progress bar
+                progress_pct = 0
+                progress_bar = self._create_progress_bar(progress_pct)
+                
                 embed = discord.Embed(
-                    title="🏗️ Mega Project Started!",
-                    description=f"**{selected_project['name']}** has been initiated!",
+                    title="🏗️ Active Mega Project",
+                    description=f"**{selected_project['name']}**\n{selected_project['description']}",
                     color=discord.Color.blue()
-                )
-                embed.add_field(
-                    name="📋 Description",
-                    value=selected_project['description'],
-                    inline=False
                 )
                 embed.add_field(
                     name="💰 Total Cost",
@@ -99,16 +104,26 @@ class MegaProjectSelectView(discord.ui.View):
                 )
                 embed.add_field(
                     name="📊 Progress",
-                    value=f"$0 / {cost_display} (0%)",
+                    value=f"{progress_bar}\n$0 / {cost_display} (0.0%)",
                     inline=False
                 )
                 embed.add_field(
-                    name="💡 Next Steps",
-                    value="Corporation members can contribute using `/contribute-to-project`",
+                    name="💡 How to Contribute",
+                    value="Use `/contribute-to-project <amount>` to help complete this project!",
                     inline=False
                 )
+                embed.set_footer(text=f"Project ID: {selected_project['id']}")
                 
-                await interaction.followup.send(embed=embed)
+                # Pin the message
+                message = await interaction.followup.send(embed=embed)
+                try:
+                    await message.pin()
+                except:
+                    pass  # If pinning fails, just continue
+                    
+                # Store the message ID for future updates
+                await db.set_corporation_project_message(self.corporation_id, str(message.id))
+                
         except Exception as e:
             import traceback
             error_details = traceback.format_exc()
@@ -132,6 +147,13 @@ class MegaProjectSelectView(discord.ui.View):
                     )
                 except:
                     pass
+    
+    def _create_progress_bar(self, progress_pct: float, length: int = 20) -> str:
+        """Create a visual progress bar"""
+        filled = int((progress_pct / 100) * length)
+        empty = length - filled
+        bar = "█" * filled + "░" * empty
+        return f"[{bar}]"
 
 
 
@@ -188,81 +210,86 @@ class MegaProjects(commands.Cog):
         active_project = await db.get_corporation_active_project(corp['id'])
         
         if active_project:
-            # Show current project status
+            # Display current active project
+            if active_project['total_cost'] >= 1_000_000_000:
+                cost_billions = active_project['total_cost'] / 1_000_000_000
+                cost_display = f"${cost_billions:.1f}B"
+            else:
+                cost_display = f"${active_project['total_cost']:,}"
+            
             progress_pct = (active_project['current_funding'] / active_project['total_cost']) * 100
+            progress_bar = self._create_progress_bar(progress_pct)
+            
+            status = "✅ COMPLETED!" if active_project['completed'] else "🔨 IN PROGRESS"
             
             embed = discord.Embed(
-                title=f"🏗️ [{corp['tag']}] Active Mega Project",
-                description=f"**{active_project['name']}**",
+                title=f"{status} - {active_project['name']}",
+                description=active_project['description'],
                 color=discord.Color.gold() if active_project['completed'] else discord.Color.blue()
             )
             embed.add_field(
-                name="📋 Description",
-                value=active_project['description'],
+                name="💰 Total Cost",
+                value=cost_display,
+                inline=True
+            )
+            embed.add_field(
+                name="🎁 Buff",
+                value=f"{active_project['buff_type']}: +{active_project['buff_value']}%",
+                inline=True
+            )
+            embed.add_field(
+                name="📊 Progress",
+                value=f"{progress_bar}\n${active_project['current_funding']:,} / {cost_display} ({progress_pct:.1f}%)",
                 inline=False
-            )
-            embed.add_field(
-                name="💰 Funding Progress",
-                value=f"${active_project['current_funding']:,} / ${active_project['total_cost']:,}",
-                inline=True
-            )
-            embed.add_field(
-                name="📊 Completion",
-                value=f"{progress_pct:.1f}%",
-                inline=True
             )
             
             if active_project['completed']:
                 embed.add_field(
-                    name="✅ Status",
-                    value=f"**COMPLETED**\n🎁 Buff Active: {active_project['buff_type']} +{active_project['buff_value']}%",
+                    name="🎉 Buff Active!",
+                    value="All corporation members are now benefiting from this bonus!",
                     inline=False
                 )
             else:
                 embed.add_field(
-                    name="💡 Contribute",
-                    value="Use `/contribute-to-project <amount>` to help fund this project!",
-                    inline=False
-                )
-            
-            # Get top contributors
-            contributors = await db.get_project_contributions(active_project['id'])
-            if contributors:
-                contrib_text = ""
-                for i, contrib in enumerate(contributors[:5], 1):
-                    contrib_text += f"{i}. <@{contrib['user_id']}>: ${contrib['total_contributed']:,}\n"
-                embed.add_field(
-                    name="🏆 Top Contributors",
-                    value=contrib_text,
+                    name="💡 How to Contribute",
+                    value="Use `/contribute-to-project <amount>` to help complete this project!",
                     inline=False
                 )
             
             await interaction.followup.send(embed=embed)
         else:
-            # Show available projects for selection
+            # Show available projects
             projects = await db.get_all_mega_projects()
             
             embed = discord.Embed(
-                title="📋 Available Mega Projects",
-                description=f"**[{corp['tag']}] {corp['name']}**\n\n"
-                           "Choose a mega project for your corporation!\n"
-                           "Only the corporation leader can select a project.",
+                title="🏗️ Available Mega Projects",
+                description="**[TEST] test**\n\nChoose a mega project for your corporation!\nOnly the corporation leader can select a project.",
                 color=discord.Color.blue()
             )
             
             for project in projects:
+                if project['total_cost'] >= 1_000_000_000:
+                    cost_billions = project['total_cost'] / 1_000_000_000
+                    cost_display = f"${cost_billions:.1f}B"
+                else:
+                    cost_millions = project['total_cost'] / 1_000_000
+                    cost_display = f"${cost_millions:.1f}M"
+                
                 embed.add_field(
-                    name=f"🏗️ {project['name']}",
-                    value=f"**Cost:** ${project['total_cost']:,}\n"
-                          f"**Buff:** {project['buff_type']} +{project['buff_value']}%\n"
-                          f"*{project['description']}*",
+                    name=f"🏢 {project['name']}",
+                    value=(
+                        f"{project['description']}\n"
+                        f"**Cost:** {cost_display}\n"
+                        f"**Buff:** {project['buff_type']} +{project['buff_value']}%"
+                    ),
                     inline=False
                 )
             
-            # Only show selection if user is leader
+            embed.set_footer(text="Select a project from the dropdown below")
+            
+            # Check if user is the leader
             if str(interaction.user.id) == corp['leader_id']:
                 view = MegaProjectSelectView(corp['id'], corp['leader_id'], projects)
-                embed.set_footer(text="Select a project from the dropdown below")
                 await interaction.followup.send(embed=embed, view=view)
             else:
                 embed.set_footer(text="Ask your corporation leader to select a project")
@@ -354,6 +381,13 @@ class MegaProjects(commands.Cog):
         progress_pct = (new_funding / updated_project['total_cost']) * 100
         was_completed = new_funding >= updated_project['total_cost']
         
+        # Display cost
+        if updated_project['total_cost'] >= 1_000_000_000:
+            cost_billions = updated_project['total_cost'] / 1_000_000_000
+            cost_display = f"${cost_billions:.1f}B"
+        else:
+            cost_display = f"${updated_project['total_cost']:,}"
+        
         embed = discord.Embed(
             title="✅ Contribution Successful!",
             description=f"You've contributed **${amount:,}** to **{active_project['name']}**",
@@ -361,7 +395,7 @@ class MegaProjects(commands.Cog):
         )
         embed.add_field(
             name="💰 New Funding Total",
-            value=f"${new_funding:,} / ${updated_project['total_cost']:,}",
+            value=f"${new_funding:,} / {cost_display}",
             inline=True
         )
         embed.add_field(
@@ -383,6 +417,90 @@ class MegaProjects(commands.Cog):
         embed.set_footer(text=f"New balance: ${player['balance']:,}")
         
         await interaction.followup.send(embed=embed)
+        
+        # Update the pinned project message
+        await self._update_project_message(corp['id'], interaction.channel)
+    
+    async def _update_project_message(self, corporation_id: int, channel: discord.Thread):
+        """Update the pinned mega project message with current progress"""
+        try:
+            # Get the project message ID
+            project_message_id = await db.get_corporation_project_message(corporation_id)
+            if not project_message_id:
+                return
+            
+            # Get current project status
+            active_project = await db.get_corporation_active_project(corporation_id)
+            if not active_project:
+                return
+            
+            # Fetch the message
+            try:
+                message = await channel.fetch_message(int(project_message_id))
+            except:
+                return  # Message not found or deleted
+            
+            # Calculate progress
+            progress_pct = (active_project['current_funding'] / active_project['total_cost']) * 100
+            progress_bar = self._create_progress_bar(progress_pct)
+            
+            # Display cost
+            if active_project['total_cost'] >= 1_000_000_000:
+                cost_billions = active_project['total_cost'] / 1_000_000_000
+                cost_display = f"${cost_billions:.1f}B"
+            else:
+                cost_display = f"${active_project['total_cost']:,}"
+            
+            status = "✅ COMPLETED!" if active_project['completed'] else "🔨 IN PROGRESS"
+            
+            embed = discord.Embed(
+                title=f"🏗️ Active Mega Project - {status}",
+                description=f"**{active_project['name']}**\n{active_project['description']}",
+                color=discord.Color.gold() if active_project['completed'] else discord.Color.blue()
+            )
+            embed.add_field(
+                name="💰 Total Cost",
+                value=cost_display,
+                inline=True
+            )
+            embed.add_field(
+                name="🎁 Buff",
+                value=f"{active_project['buff_type']}: +{active_project['buff_value']}%",
+                inline=True
+            )
+            embed.add_field(
+                name="📊 Progress",
+                value=f"{progress_bar}\n${active_project['current_funding']:,} / {cost_display} ({progress_pct:.1f}%)",
+                inline=False
+            )
+            
+            if active_project['completed']:
+                embed.add_field(
+                    name="🎉 Buff Active!",
+                    value="All corporation members are now benefiting from this bonus!",
+                    inline=False
+                )
+            else:
+                embed.add_field(
+                    name="💡 How to Contribute",
+                    value="Use `/contribute-to-project <amount>` to help complete this project!",
+                    inline=False
+                )
+            
+            embed.set_footer(text=f"Last updated")
+            embed.timestamp = discord.utils.utcnow()
+            
+            await message.edit(embed=embed)
+            
+        except Exception as e:
+            print(f"[ERROR] Failed to update project message: {e}")
+    
+    def _create_progress_bar(self, progress_pct: float, length: int = 20) -> str:
+        """Create a visual progress bar"""
+        filled = int((progress_pct / 100) * length)
+        empty = length - filled
+        bar = "█" * filled + "░" * empty
+        return f"[{bar}]"
     
     @app_commands.command(name="setup-corporation-forum", description="⚙️ Set up corporation forum channel (Admin only)")
     @app_commands.describe(
