@@ -52,8 +52,15 @@ class MegaProjectSelectView(discord.ui.View):
     
     async def select_callback(self, interaction: discord.Interaction):
         """Handle project selection"""
+        print(f"[DEBUG select_callback] START - User {interaction.user.id} selecting project")
+        
         # Defer immediately to prevent timeout
-        await interaction.response.defer()
+        try:
+            await interaction.response.defer()
+            print(f"[DEBUG select_callback] Successfully deferred interaction")
+        except Exception as e:
+            print(f"[ERROR select_callback] Failed to defer: {e}")
+            return
         
         user_id_str = str(interaction.user.id)
         
@@ -61,89 +68,118 @@ class MegaProjectSelectView(discord.ui.View):
         print(f"[DEBUG select_callback] User ID: {user_id_str}, Leader ID: {self.leader_id}, Match: {user_id_str == self.leader_id}")
         
         if user_id_str != self.leader_id:
+            print(f"[DEBUG select_callback] User is not leader, sending error")
             return await interaction.followup.send(
                 f"❌ Only the corporation leader can select mega projects!",
                 ephemeral=True
             )
         
         project_id = int(interaction.values[0])
+        print(f"[DEBUG select_callback] Selected project ID: {project_id}")
         
         # Start the project
         try:
+            print(f"[DEBUG select_callback] Starting project {project_id} for corporation {self.corporation_id}")
             await db.start_mega_project(self.corporation_id, project_id)
+            print(f"[DEBUG select_callback] Project started successfully in database")
             
             # Get project details
+            print(f"[DEBUG select_callback] Fetching all mega projects")
             projects = await db.get_all_mega_projects()
-            selected_project = next((p for p in projects if p['id'] == project_id), None)
+            print(f"[DEBUG select_callback] Found {len(projects)} total projects")
             
-            if selected_project:
-                # Delete the original view-mega-projects message
-                try:
-                    await interaction.message.delete()
-                except:
-                    pass  # If deletion fails, just continue
+            selected_project = next((p for p in projects if p['id'] == project_id), None)
+            print(f"[DEBUG select_callback] Selected project details: {selected_project}")
+            
+            if not selected_project:
+                print(f"[ERROR select_callback] Could not find project {project_id} in database")
+                return await interaction.followup.send(
+                    f"❌ Error: Could not find project details (ID: {project_id})",
+                    ephemeral=True
+                )
+            
+            # Delete the original view-mega-projects message
+            try:
+                print(f"[DEBUG select_callback] Attempting to delete original message")
+                await interaction.message.delete()
+                print(f"[DEBUG select_callback] Original message deleted")
+            except Exception as e:
+                print(f"[DEBUG select_callback] Could not delete original message: {e}")
+            
+            # Display cost in billions for clarity
+            if selected_project['total_cost'] >= 1_000_000_000:
+                cost_billions = selected_project['total_cost'] / 1_000_000_000
+                cost_display = f"${cost_billions:.1f}B"
+            else:
+                cost_display = f"${selected_project['total_cost']:,}"
+            
+            # Create progress bar
+            progress_pct = 0
+            progress_bar = self._create_progress_bar(progress_pct)
+            
+            print(f"[DEBUG select_callback] Creating embed for project")
+            embed = discord.Embed(
+                title="🏗️ Active Mega Project",
+                description=f"**{selected_project['name']}**\n{selected_project['description']}",
+                color=discord.Color.blue()
+            )
+            embed.add_field(
+                name="💰 Total Cost",
+                value=cost_display,
+                inline=True
+            )
+            embed.add_field(
+                name="🎁 Buff",
+                value=f"{selected_project['buff_type']}: +{selected_project['buff_value']}%",
+                inline=True
+            )
+            embed.add_field(
+                name="📊 Progress",
+                value=f"{progress_bar}\n$0 / {cost_display} (0.0%)",
+                inline=False
+            )
+            embed.add_field(
+                name="💡 How to Contribute",
+                value="Use `/contribute-to-project <amount>` to help complete this project!",
+                inline=False
+            )
+            embed.set_footer(text=f"Project ID: {selected_project['id']}")
+            
+            # Send the message
+            print(f"[DEBUG select_callback] Sending followup message with embed")
+            message = await interaction.followup.send(embed=embed)
+            print(f"[DEBUG select_callback] Message sent, ID: {message.id}")
+            
+            # Pin the message
+            try:
+                print(f"[DEBUG select_callback] Attempting to pin message")
+                await message.pin()
+                print(f"[DEBUG select_callback] Message pinned successfully")
+            except Exception as e:
+                print(f"[DEBUG select_callback] Could not pin message: {e}")
                 
-                # Display cost in billions for clarity
-                if selected_project['total_cost'] >= 1_000_000_000:
-                    cost_billions = selected_project['total_cost'] / 1_000_000_000
-                    cost_display = f"${cost_billions:.1f}B"
-                else:
-                    cost_display = f"${selected_project['total_cost']:,}"
-                
-                # Create progress bar
-                progress_pct = 0
-                progress_bar = self._create_progress_bar(progress_pct)
-                
-                embed = discord.Embed(
-                    title="🏗️ Active Mega Project",
-                    description=f"**{selected_project['name']}**\n{selected_project['description']}",
-                    color=discord.Color.blue()
-                )
-                embed.add_field(
-                    name="💰 Total Cost",
-                    value=cost_display,
-                    inline=True
-                )
-                embed.add_field(
-                    name="🎁 Buff",
-                    value=f"{selected_project['buff_type']}: +{selected_project['buff_value']}%",
-                    inline=True
-                )
-                embed.add_field(
-                    name="📊 Progress",
-                    value=f"{progress_bar}\n$0 / {cost_display} (0.0%)",
-                    inline=False
-                )
-                embed.add_field(
-                    name="💡 How to Contribute",
-                    value="Use `/contribute-to-project <amount>` to help complete this project!",
-                    inline=False
-                )
-                embed.set_footer(text=f"Project ID: {selected_project['id']}")
-                
-                # Pin the message
-                message = await interaction.followup.send(embed=embed)
-                try:
-                    await message.pin()
-                except:
-                    pass  # If pinning fails, just continue
-                    
-                # Store the message ID for future updates
-                await db.set_corporation_project_message(self.corporation_id, str(message.id))
+            # Store the message ID for future updates
+            print(f"[DEBUG select_callback] Storing project message ID in database")
+            await db.set_corporation_project_message(self.corporation_id, str(message.id))
+            print(f"[DEBUG select_callback] COMPLETE - Project selection successful")
                 
         except Exception as e:
             import traceback
             error_details = traceback.format_exc()
-            print(f"[ERROR] Mega project selection failed: {error_details}")
+            print(f"[ERROR] Mega project selection failed:")
+            print(error_details)
             
             error_message = str(e)
             if "duplicate key" in error_message.lower() or "unique constraint" in error_message.lower():
                 error_message = "Your corporation already has an active mega project! Complete or cancel it first."
             
-            await interaction.followup.send(
-                f"❌ Error starting project: {error_message}",
-                ephemeral=True
-            )
+            try:
+                await interaction.followup.send(
+                    f"❌ Error starting project: {error_message}",
+                    ephemeral=True
+                )
+            except Exception as followup_error:
+                print(f"[ERROR] Could not send error message to user: {followup_error}")
 
 
 
