@@ -19,8 +19,31 @@ async def generate_company_income(bot: 'commands.Bot'):
         
         for company in companies:
             try:
-                # Add current income to player balance
-                await db.update_player_balance(company['owner_id'], company['current_income'])
+                # Get corporation buffs for the company owner
+                corp = await db.get_player_corporation(company['owner_id'])
+                income = company['current_income']
+                
+                if corp:
+                    buff = await db.get_corporation_project_buff(corp['id'])
+                    
+                    if buff:
+                        # Apply income_boost (Global Trade Network - 15%)
+                        if buff['buff_type'] == 'income_boost':
+                            multiplier = 1 + (buff['buff_value'] / 100)
+                            income = int(income * multiplier)
+                        
+                        # Apply company_income (Advanced R&D Facility - 20%)
+                        elif buff['buff_type'] == 'company_income':
+                            multiplier = 1 + (buff['buff_value'] / 100)
+                            income = int(income * multiplier)
+                        
+                        # Apply global_efficiency (Corporate University - 12%)
+                        elif buff['buff_type'] == 'global_efficiency':
+                            multiplier = 1 + (buff['buff_value'] / 100)
+                            income = int(income * multiplier)
+                
+                # Add income to player balance
+                await db.update_player_balance(company['owner_id'], income)
                 income_generated += 1
                 
             except Exception as e:
