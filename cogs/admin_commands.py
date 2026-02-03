@@ -2274,6 +2274,139 @@ class MaintenanceCommands(commands.Cog):
         except Exception as e:
             import traceback
             await interaction.response.send_message(f'❌ Error: {str(e)}\n```\n{traceback.format_exc()[:1000]}\n```', ephemeral=True)
+    
+    @app_commands.command(name="freeze-income", description="⚙️ Freeze or unfreeze income generation (Admin only)")
+    @app_commands.describe(
+        action="Freeze or unfreeze income generation"
+    )
+    @app_commands.choices(action=[
+        app_commands.Choice(name="🧊 Freeze - Stop all income generation", value="freeze"),
+        app_commands.Choice(name="🔥 Unfreeze - Resume income generation", value="unfreeze")
+    ])
+    async def freeze_income(self, interaction: discord.Interaction, action: app_commands.Choice[str]):
+        """Freeze or unfreeze income generation for this server"""
+        if not await is_admin_or_authorized(interaction):
+            return await interaction.response.send_message(
+                "❌ You don't have permission to use this command.",
+                ephemeral=True
+            )
+        
+        await interaction.response.defer(ephemeral=True)
+        
+        try:
+            guild_id = str(interaction.guild.id)
+            
+            if action.value == "freeze":
+                await db.set_income_frozen(guild_id, True)
+                
+                embed = discord.Embed(
+                    title="🧊 Income Generation Frozen",
+                    description="All company income generation has been **frozen** for this server.",
+                    color=discord.Color.blue()
+                )
+                embed.add_field(
+                    name="📊 What This Means",
+                    value="• Companies will no longer generate income every 30 seconds\n"
+                          "• All other bot functions continue normally\n"
+                          "• Events can still modify company income values\n"
+                          "• Use `/freeze-income unfreeze` to resume income generation",
+                    inline=False
+                )
+                embed.add_field(
+                    name="⚠️ Note",
+                    value="This only affects income generation, not balance changes from other sources (trades, commands, etc.)",
+                    inline=False
+                )
+                embed.set_footer(text=f"Frozen by {interaction.user.name}")
+                embed.timestamp = discord.utils.utcnow()
+                
+                await interaction.followup.send(embed=embed, ephemeral=True)
+                
+                try:
+                    announcement_embed = discord.Embed(
+                        title="🧊 Server Announcement",
+                        description="**Income generation has been frozen** by server administration.\n\n"
+                                    "Companies will not generate income until further notice.",
+                        color=discord.Color.blue()
+                    )
+                    announcement_embed.timestamp = discord.utils.utcnow()
+                    await interaction.channel.send(embed=announcement_embed)
+                except:
+                    pass
+                    
+            else:
+                await db.set_income_frozen(guild_id, False)
+                
+                embed = discord.Embed(
+                    title="🔥 Income Generation Resumed",
+                    description="Company income generation has been **unfrozen** and will resume normally.",
+                    color=discord.Color.green()
+                )
+                embed.add_field(
+                    name="📊 What This Means",
+                    value="• Companies will now generate income every 30 seconds\n"
+                          "• All systems are operating normally\n"
+                          "• Income generation follows standard rules and buffs",
+                    inline=False
+                )
+                embed.set_footer(text=f"Unfrozen by {interaction.user.name}")
+                embed.timestamp = discord.utils.utcnow()
+                
+                await interaction.followup.send(embed=embed, ephemeral=True)
+                
+                try:
+                    announcement_embed = discord.Embed(
+                        title="🔥 Server Announcement",
+                        description="**Income generation has been resumed** by server administration.\n\n"
+                                    "Companies will now generate income every 30 seconds as normal.",
+                        color=discord.Color.green()
+                    )
+                    announcement_embed.timestamp = discord.utils.utcnow()
+                    await interaction.channel.send(embed=announcement_embed)
+                except:
+                    pass
+            
+        except Exception as e:
+            await interaction.followup.send(
+                f"❌ Error updating income freeze status: {e}",
+                ephemeral=True
+            )
+    
+    @app_commands.command(name="income-status", description="📊 Check if income generation is frozen")
+    async def income_status(self, interaction: discord.Interaction):
+        """Check the income generation status for this server"""
+        guild_id = str(interaction.guild.id)
+        is_frozen = await db.is_income_frozen(guild_id)
+        
+        if is_frozen:
+            embed = discord.Embed(
+                title="🧊 Income Status: FROZEN",
+                description="Income generation is currently **frozen** for this server.",
+                color=discord.Color.blue()
+            )
+            embed.add_field(
+                name="📊 What This Means",
+                value="• Companies are NOT generating income\n"
+                      "• Other bot functions work normally\n"
+                      "• Contact an admin to unfreeze income",
+                inline=False
+            )
+        else:
+            embed = discord.Embed(
+                title="✅ Income Status: ACTIVE",
+                description="Income generation is currently **active** for this server.",
+                color=discord.Color.green()
+            )
+            embed.add_field(
+                name="📊 What This Means",
+                value="• Companies generate income every 30 seconds\n"
+                      "• All systems operating normally\n"
+                      "• Income follows standard rules and buffs",
+                inline=False
+            )
+        
+        embed.timestamp = discord.utils.utcnow()
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
 async def setup(bot):
     await bot.add_cog(LeaderboardCommands(bot))
