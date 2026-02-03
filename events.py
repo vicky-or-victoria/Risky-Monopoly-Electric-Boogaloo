@@ -16,9 +16,34 @@ async def generate_company_income(bot: 'commands.Bot'):
     try:
         companies = await db.get_all_companies()
         income_generated = 0
+        frozen_guilds = set()  # Cache guilds with frozen income
         
         for company in companies:
             try:
+                # Get the guild ID from the thread to check freeze status
+                guild_id = None
+                if company.get('thread_id'):
+                    thread = bot.get_channel(int(company['thread_id']))
+                    if not thread:
+                        try:
+                            thread = await bot.fetch_channel(int(company['thread_id']))
+                        except:
+                            thread = None
+                    
+                    if thread and hasattr(thread, 'guild'):
+                        guild_id = str(thread.guild.id)
+                        
+                        # Check if income is frozen for this guild (with caching)
+                        if guild_id in frozen_guilds:
+                            # Already know this guild is frozen
+                            continue
+                        
+                        # Check freeze status and cache it
+                        is_frozen = await db.is_income_frozen(guild_id)
+                        if is_frozen:
+                            frozen_guilds.add(guild_id)
+                            continue
+                
                 # Get corporation buffs for the company owner
                 corp = await db.get_player_corporation(company['owner_id'])
                 income = company['current_income']
@@ -51,6 +76,9 @@ async def generate_company_income(bot: 'commands.Bot'):
         
         if income_generated > 0:
             print(f'💰 Generated income for {income_generated} companies')
+        
+        if frozen_guilds:
+            print(f'🧊 Skipped income for {len(frozen_guilds)} frozen guild(s)')
         
     except Exception as e:
         print(f'Error in generate_company_income: {e}')
