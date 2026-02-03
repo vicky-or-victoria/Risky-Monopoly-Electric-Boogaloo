@@ -314,8 +314,18 @@ class StockSharesModal(discord.ui.Modal, title="Enter Number of Shares"):
         # Calculate progressive tax
         base_tax = await db.calculate_stock_trade_tax(sale_value)
         
-        # Apply corporation buff if applicable
+        # Apply corporation tax reduction buff if applicable
         final_tax = await db.apply_tax_reduction_buff(str(interaction.user.id), base_tax)
+        
+        # Apply trading bonus buff (Market Intelligence Center - reduces fees/taxes by 10%)
+        corp = await db.get_player_corporation(str(interaction.user.id))
+        trading_bonus_applied = False
+        if corp:
+            buff = await db.get_corporation_project_buff(corp['id'])
+            if buff and buff['buff_type'] == 'trading_bonus':
+                reduction = buff['buff_value'] / 100
+                final_tax = int(final_tax * (1 - reduction))
+                trading_bonus_applied = True
         
         # Calculate net proceeds after tax
         net_proceeds = sale_value - final_tax
@@ -348,6 +358,13 @@ class StockSharesModal(discord.ui.Modal, title="Enter Number of Shares"):
             embed.add_field(
                 name="🎁 Corp Tax Reduction", 
                 value=f"-${base_tax - final_tax:,}", 
+                inline=True
+            )
+        
+        if trading_bonus_applied:
+            embed.add_field(
+                name="📊 Trading Bonus",
+                value=f"✨ Market Intelligence active!",
                 inline=True
             )
         
