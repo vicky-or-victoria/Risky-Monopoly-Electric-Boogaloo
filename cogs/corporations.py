@@ -12,6 +12,113 @@ class Corporations(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
     
+    async def create_or_update_corporation_hub(
+        self,
+        corp_id: int,
+        corp_name: str,
+        corp_tag: str,
+        leader_id: str,
+        channel: discord.Thread,
+        is_new: bool = False
+    ) -> Optional[discord.Message]:
+        """Create or update the corporation hub embed with current member list"""
+        
+        # Get corporation members
+        members = await db.get_corporation_members(corp_id)
+        
+        # Get leader user object
+        try:
+            leader = await self.bot.fetch_user(int(leader_id))
+            leader_mention = leader.mention
+        except:
+            leader_mention = f"<@{leader_id}>"
+        
+        # Create member list
+        if members:
+            member_list = []
+            for idx, member in enumerate(members[:10], 1):  # Show top 10 members
+                try:
+                    user = await self.bot.fetch_user(int(member['user_id']))
+                    # Add crown emoji for leader
+                    if member['user_id'] == leader_id:
+                        member_list.append(f"👑 {user.mention} - ${member['balance']:,}")
+                    else:
+                        member_list.append(f"{idx}. {user.mention} - ${member['balance']:,}")
+                except:
+                    if member['user_id'] == leader_id:
+                        member_list.append(f"👑 <@{member['user_id']}> - ${member['balance']:,}")
+                    else:
+                        member_list.append(f"{idx}. <@{member['user_id']}> - ${member['balance']:,}")
+            
+            member_text = "\n".join(member_list)
+            if len(members) > 10:
+                member_text += f"\n... and {len(members) - 10} more"
+        else:
+            member_text = "No members yet"
+        
+        embed = discord.Embed(
+            title=f"🏢 [{corp_tag}] {corp_name}",
+            description=f"**Corporation Hub**\n\nWelcome to the official forum for **{corp_name}**!",
+            color=discord.Color.gold()
+        )
+        embed.add_field(name="👑 Leader", value=leader_mention, inline=True)
+        embed.add_field(name="🆔 Corporation ID", value=f"#{corp_id}", inline=True)
+        embed.add_field(name="👥 Member Count", value=str(len(members)), inline=True)
+        embed.add_field(
+            name="📋 Members",
+            value=member_text,
+            inline=False
+        )
+        embed.add_field(
+            name="📋 Available Commands",
+            value=(
+                "• `/view-mega-projects` - View and select mega projects\n"
+                "• `/contribute-to-project` - Contribute to active project\n"
+                "• `/corporation-info` - View corporation details"
+            ),
+            inline=False
+        )
+        embed.set_footer(text=f"Last updated")
+        embed.timestamp = discord.utils.utcnow()
+        
+        if is_new:
+            # Create new message
+            message = await channel.send(embed=embed)
+            # Store the message ID
+            await db.set_corporation_hub_message(corp_id, str(message.id))
+            # Try to pin the hub message
+            try:
+                await message.pin()
+            except:
+                pass  # Pinning failed, that's okay
+            return message
+        else:
+            # Update existing message
+            hub_message_id = await db.get_corporation_hub_message(corp_id)
+            if hub_message_id:
+                try:
+                    message = await channel.fetch_message(int(hub_message_id))
+                    await message.edit(embed=embed)
+                    return message
+                except:
+                    # Message not found, create new one
+                    message = await channel.send(embed=embed)
+                    await db.set_corporation_hub_message(corp_id, str(message.id))
+                    try:
+                        await message.pin()
+                    except:
+                        pass
+                    return message
+            else:
+                # No hub message stored, create new one
+                message = await channel.send(embed=embed)
+                await db.set_corporation_hub_message(corp_id, str(message.id))
+                try:
+                    await message.pin()
+                except:
+                    pass
+                return message
+    
     @app_commands.command(name="create-corporation", description="🏢 Create a corporation (player clan)")
     @app_commands.describe(
         name="Corporation name",
@@ -87,29 +194,10 @@ class Corporations(commands.Cog):
         
         # Create forum post for the corporation
         try:
-            forum_embed = discord.Embed(
-                title=f"🏢 [{tag.upper()}] {name}",
-                description=f"**Corporation Hub**\n\nWelcome to the official forum for **{name}**!",
-                color=discord.Color.gold()
-            )
-            forum_embed.add_field(name="👑 Leader", value=interaction.user.mention, inline=True)
-            forum_embed.add_field(name="🆔 Corporation ID", value=f"#{corp_id}", inline=True)
-            forum_embed.add_field(name="👥 Members", value="1", inline=True)
-            forum_embed.add_field(
-                name="📋 Available Commands",
-                value=(
-                    "• `/view-mega-projects` - View and select mega projects\n"
-                    "• `/contribute-to-project` - Contribute to active project\n"
-                    "• `/corporation-info` - View corporation details"
-                ),
-                inline=False
-            )
-            forum_embed.set_footer(text=f"Created on {discord.utils.format_dt(discord.utils.utcnow(), 'F')}")
-            
             # Create the forum post
             forum_result = await forum_channel.create_thread(
                 name=f"[{tag.upper()}] {name}",
-                embed=forum_embed,
+                content=f"🎉 Welcome! This is the official forum for **[{tag.upper()}] {name}**!",
                 reason=f"Corporation forum created by {interaction.user.name}"
             )
             
@@ -121,11 +209,14 @@ class Corporations(commands.Cog):
             
             print(f"[DEBUG] Created corporation forum - Corp ID: {corp_id}, Thread ID: {forum_post.id}")
             
-            # Send a welcome message in the forum post
-            welcome_msg = await forum_post.send(
-                f"🎉 Welcome {interaction.user.mention}! This is your corporation's private forum.\n\n"
-                f"**Only members of [{tag.upper()}] {name} can post here.**\n"
-                f"Use this space to coordinate with your corporation members!"
+            # Create the corporation hub embed with member list
+            await self.create_or_update_corporation_hub(
+                corp_id=corp_id,
+                corp_name=name,
+                corp_tag=tag.upper(),
+                leader_id=str(interaction.user.id),
+                channel=forum_post,
+                is_new=True
             )
             
         except discord.Forbidden:
@@ -246,6 +337,8 @@ class Corporations(commands.Cog):
             )
             return
         
+        await interaction.response.defer()
+        
         # Accept invite
         corp = await db.get_corporation_by_id(invite['corporation_id'])
         await db.accept_corporation_invite(invite['id'], str(interaction.user.id))
@@ -258,7 +351,24 @@ class Corporations(commands.Cog):
         embed.add_field(name="👑 Leader", value=f"<@{corp['leader_id']}>", inline=True)
         embed.add_field(name="🆔 Corporation ID", value=f"#{corp['id']}", inline=True)
         
-        await interaction.response.send_message(embed=embed)
+        await interaction.followup.send(embed=embed)
+        
+        # Update the corporation hub embed
+        forum_post_id = await db.get_corporation_forum_post(corp['id'])
+        if forum_post_id:
+            try:
+                channel = interaction.guild.get_thread(int(forum_post_id))
+                if channel:
+                    await self.create_or_update_corporation_hub(
+                        corp_id=corp['id'],
+                        corp_name=corp['name'],
+                        corp_tag=corp['tag'],
+                        leader_id=corp['leader_id'],
+                        channel=channel,
+                        is_new=False
+                    )
+            except Exception as e:
+                print(f"[ERROR] Failed to update corporation hub after member join: {e}")
     
     @app_commands.command(name="corporation-info", description="ℹ️ View corporation information")
     @app_commands.describe(
@@ -322,6 +432,8 @@ class Corporations(commands.Cog):
             )
             return
         
+        await interaction.response.defer()
+        
         await db.remove_player_from_corporation(str(interaction.user.id))
         
         embed = discord.Embed(
@@ -330,7 +442,24 @@ class Corporations(commands.Cog):
             color=discord.Color.orange()
         )
         
-        await interaction.response.send_message(embed=embed)
+        await interaction.followup.send(embed=embed)
+        
+        # Update the corporation hub embed
+        forum_post_id = await db.get_corporation_forum_post(corp['id'])
+        if forum_post_id:
+            try:
+                channel = interaction.guild.get_thread(int(forum_post_id))
+                if channel:
+                    await self.create_or_update_corporation_hub(
+                        corp_id=corp['id'],
+                        corp_name=corp['name'],
+                        corp_tag=corp['tag'],
+                        leader_id=corp['leader_id'],
+                        channel=channel,
+                        is_new=False
+                    )
+            except Exception as e:
+                print(f"[ERROR] Failed to update corporation hub after member leave: {e}")
     
     @app_commands.command(name="disband-corporation", description="💥 Disband your corporation (Leader only)")
     async def disband_corporation(self, interaction: discord.Interaction):
