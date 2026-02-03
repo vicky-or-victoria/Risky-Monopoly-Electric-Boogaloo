@@ -402,6 +402,8 @@ async def init_database():
                 "ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS company_leaderboard_message_id VARCHAR(255)",
                 "ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS corporation_forum_channel_id VARCHAR(255)",
                 "ALTER TABLE corporations ADD COLUMN IF NOT EXISTS forum_post_id VARCHAR(255)",
+                "ALTER TABLE corporations ADD COLUMN IF NOT EXISTS project_message_id VARCHAR(255)",
+                "ALTER TABLE corporations ADD COLUMN IF NOT EXISTS hub_message_id VARCHAR(255)",
             ]
             for migration in migrations:
                 await conn.execute(migration)
@@ -1636,13 +1638,13 @@ async def set_max_companies(guild_id: str, max_companies: int):
 async def initialize_mega_projects():
     """Initialize default mega projects if they don't exist, or update costs if they do"""
     async with pool.acquire() as conn:
-        # Define mega projects with billion-dollar costs
+        # Define mega projects with reduced costs (1-5 billion)
         projects = {
-            'Global Trade Network': ('Establishes international trade routes for all corporation members', 5000000000, 'income_boost', 15.0),
-            'Tax Haven Initiative': ('Reduces stock trading taxes for all corporation members', 10000000000, 'tax_reduction', 50.0),
-            'Advanced R&D Facility': ('Boosts company income generation for all members', 15000000000, 'company_income', 20.0),
-            'Market Intelligence Center': ('Provides market insights and reduced trading fees', 12000000000, 'trading_bonus', 10.0),
-            'Corporate University': ('Increases efficiency across all member operations', 20000000000, 'global_efficiency', 12.0),
+            'Global Trade Network': ('Establishes international trade routes for all corporation members', 1_000_000_000, 'income_boost', 15.0),
+            'Tax Haven Initiative': ('Reduces stock trading taxes for all corporation members', 2_000_000_000, 'tax_reduction', 50.0),
+            'Market Intelligence Center': ('Provides market insights and reduced trading fees', 3_000_000_000, 'trading_bonus', 10.0),
+            'Advanced R&D Facility': ('Boosts company income generation for all members', 4_000_000_000, 'company_income', 20.0),
+            'Corporate University': ('Increases efficiency across all member operations', 5_000_000_000, 'global_efficiency', 12.0),
         }
         
         for name, (description, cost, buff_type, buff_value) in projects.items():
@@ -1665,14 +1667,14 @@ async def get_all_mega_projects() -> List[Dict]:
         return [dict(row) for row in rows]
 
 async def update_mega_project_costs_to_billions():
-    """Manual function to update all mega project costs to billions"""
+    """Manual function to update all mega project costs to reduced 1-5 billion range"""
     async with pool.acquire() as conn:
         updates = [
-            ('Global Trade Network', 5000000000),
-            ('Tax Haven Initiative', 10000000000),
-            ('Advanced R&D Facility', 15000000000),
-            ('Market Intelligence Center', 12000000000),
-            ('Corporate University', 20000000000),
+            ('Global Trade Network', 1_000_000_000),
+            ('Tax Haven Initiative', 2_000_000_000),
+            ('Market Intelligence Center', 3_000_000_000),
+            ('Advanced R&D Facility', 4_000_000_000),
+            ('Corporate University', 5_000_000_000),
         ]
         
         for name, cost in updates:
@@ -1682,7 +1684,7 @@ async def update_mega_project_costs_to_billions():
                 WHERE name = $1
             ''', name, cost)
         
-        print("✅ Updated all mega project costs to billions!")
+        print("✅ Updated all mega project costs to 1-5 billion range!")
 
 
 async def get_corporation_active_project(corporation_id: int) -> Optional[Dict]:
@@ -1799,6 +1801,42 @@ async def get_corporation_by_forum_post(post_id: str) -> Optional[Dict]:
             SELECT * FROM corporations WHERE forum_post_id = $1
         ''', post_id)
         return dict(row) if row else None
+
+async def set_corporation_project_message(corporation_id: int, message_id: str):
+    """Store the message ID of the pinned mega project embed"""
+    async with pool.acquire() as conn:
+        await conn.execute('''
+            UPDATE corporations
+            SET project_message_id = $2
+            WHERE id = $1
+        ''', corporation_id, message_id)
+
+async def get_corporation_project_message(corporation_id: int) -> Optional[str]:
+    """Get the message ID of the pinned mega project embed"""
+    async with pool.acquire() as conn:
+        return await conn.fetchval('''
+            SELECT project_message_id
+            FROM corporations
+            WHERE id = $1
+        ''', corporation_id)
+
+async def set_corporation_hub_message(corporation_id: int, message_id: str):
+    """Store the message ID of the corporation hub embed"""
+    async with pool.acquire() as conn:
+        await conn.execute('''
+            UPDATE corporations
+            SET hub_message_id = $2
+            WHERE id = $1
+        ''', corporation_id, message_id)
+
+async def get_corporation_hub_message(corporation_id: int) -> Optional[str]:
+    """Get the message ID of the corporation hub embed"""
+    async with pool.acquire() as conn:
+        return await conn.fetchval('''
+            SELECT hub_message_id
+            FROM corporations
+            WHERE id = $1
+        ''', corporation_id)
 
 
 # ==================== STOCK TRADING TAX ====================
