@@ -1602,6 +1602,8 @@ class AdminCommands(commands.Cog):
                 channels_to_check.append(('🏢 Company Forum', settings['company_forum_id']))
             if settings.get('bank_forum_id'):
                 channels_to_check.append(('🏦 Bank Forum', settings['bank_forum_id']))
+            if settings.get('corporation_forum_channel_id'):
+                channels_to_check.append(('🏛️ Corporation Forum', settings['corporation_forum_channel_id']))
             if settings.get('leaderboard_channel_id'):
                 channels_to_check.append(('📊 Leaderboard Channel', settings['leaderboard_channel_id']))
 
